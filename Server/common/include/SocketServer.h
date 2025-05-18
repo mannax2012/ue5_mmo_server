@@ -4,6 +4,7 @@
 #include <functional>
 
 using SocketPacketHandler = std::function<void(const std::vector<uint8_t>&, intptr_t)>;
+using SocketConnectionHandler = std::function<void(intptr_t)>;
 
 class SocketServer {
 public:
@@ -12,6 +13,10 @@ public:
     virtual void stop() = 0;
     virtual void send(const std::vector<uint8_t>& data, intptr_t clientSock) = 0;
     virtual void setPacketHandler(SocketPacketHandler handler) = 0;
+    // New: connection event handlers
+    virtual void setConnectionHandler(SocketConnectionHandler onConnect, SocketConnectionHandler onDisconnect) = 0;
+    // Add disconnect method
+    virtual void disconnect(intptr_t clientSock) = 0;
 };
 
 SocketServer* CreateSocketServer();

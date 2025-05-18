@@ -15,29 +15,30 @@
 #include <map>
 #include <boost/asio.hpp>
 
-struct SessionInfo {
-    int32_t playerId;
-    int32_t charId = -1;
-    std::string username;
-    std::string sessionKey;
-    intptr_t clientSock;
-};
-
 class AuthServer : public BaseServer {
 public:
     AuthServer() : BaseServer("auth") {}
 
-    void handlePacket(const std::vector<uint8_t>& data, intptr_t clientSock) override {
-        if (data.size() < sizeof(PacketHeader)) return;
-        PacketHeader header;
-        std::memcpy(&header, data.data(), sizeof(PacketHeader));
-        SessionInfo& session = sessionMap_[clientSock];
+    void handlePacket(const PacketHeader& header, const std::vector<uint8_t>& data, intptr_t clientSock) override {
+        // Use BaseServer's sessionMap for session tracking
+        auto& session = sessionMap[clientSock];
+
+        //CHECK FOR LOGIN
+        if(session.playerId == -1 && header.packetId != PACKET_C_LOGIN_REQUEST) {
+            LOG_DEBUG("Session not logged in, dropping packet.");
+            return;
+        }
+
         switch (header.packetId) {
             case PACKET_C_LOGIN_REQUEST: {
                 C_LoginRequest req;
                 if (data.size() < sizeof(C_LoginRequest)) return;
                 std::memcpy(&req, data.data(), sizeof(C_LoginRequest));
                 std::string username(req.username, req.usernameLength);
+                // Remove null bytes and whitespace
+                username.erase(std::find(username.begin(), username.end(), '\0'), username.end());
+                username.erase(0, username.find_first_not_of(" \t\r\n"));
+                username.erase(username.find_last_not_of(" \t\r\n") + 1);
                 std::string password(req.password, req.passwordLength);
                 LOG_DEBUG("Received C_LoginRequest from fd=" + std::to_string(clientSock) + " user='" + username + "' (len=" + std::to_string(req.usernameLength) + ")");
                 {
@@ -82,9 +83,11 @@ public:
                     {"playerId", std::to_string(playerId)},
                     {"username", username},
                     {"charId", std::to_string(session.charId)},
-                    {"sessionKey", sessionKey}
+                    {"sessionKey", sessionKey},
+                     {"fd", std::to_string(clientSock)}
                 };
                 redis.hset(redisSessionKey, sessionFields);
+                redis.expire(redisSessionKey, HEARTBEAT_TIMEOUT_SEC + 2); // 1 hour expiration
                 session.playerId = playerId;
                 session.username = username;
                 session.sessionKey = sessionKey;
@@ -102,6 +105,10 @@ public:
                 if (DeserializePacketRaw(data, &req, sizeof(C_CharCreate))) {
                     LOG_DEBUG("Received C_CharCreate from fd=" + std::to_string(clientSock));
                     std::string charName(req.name, req.nameLength);
+                    // Remove null bytes and whitespace
+                    charName.erase(std::find(charName.begin(), charName.end(), '\0'), charName.end());
+                    charName.erase(0, charName.find_first_not_of(" \t\r\n"));
+                    charName.erase(charName.find_last_not_of(" \t\r\n") + 1);
                     int16_t classId = req.classId;
                     LOG_DEBUG("CharCreate request: name='" + charName + "', classId=" + std::to_string(classId) + ", playerId=" + std::to_string(session.playerId));
 
@@ -117,6 +124,11 @@ public:
                     }
                     // 2. Check for duplicate name for this account
                     std::string checkQuery = "SELECT id FROM characters WHERE name='" + charName + "'";
+                    std::ostringstream oss;
+                    oss << "Username hex: ";
+                    for (int i = 0; i < req.nameLength; ++i) oss << std::hex << (int)(unsigned char)req.name[i] << " ";
+                    LOG_DEBUG(oss.str());
+                    LOG_DEBUG("CheckQuery: " + checkQuery);
                     std::vector<std::vector<std::string>> checkResult;
                     bool checkOk = mysql.query(checkQuery, checkResult);
                     if (!checkOk) {
@@ -202,27 +214,65 @@ public:
                         sendToClient(&resp, sizeof(resp), clientSock);
                         break;
                     }
-                    // Success: update the session and assign a game server (for now, use config values)
-                    std::string gameIp = config.get("game_server_ip", "127.0.0.1");
-                    int gamePort = config.getInt("game_server_port", 4000);
+                    // Success: update the session and assign a game server (dynamic via Redis)
+                    {
+                        std::vector<std::string> gameServerKeys;
+                        if (redis.keys("game_*", gameServerKeys)) {
+                            std::string selectedGameIp = "";
+                            int selectedGamePort = 0;
+                            bool found = false;
+                            for (const auto& key : gameServerKeys) {
+                                std::map<std::string, std::string> fields;
+                                if (!redis.hgetall(key, fields)) continue;
+                                std::string ip = fields["ip"];
+                                LOG_DEBUG("Game server found: " + ip + ":" + fields["port"] + ", max_players=" + fields["max_players"] + ", current_players=" + fields["current_players"]);
 
-                    session.charId = charId;
+                                int port = fields.count("port") ? std::stoi(fields["port"]) : 0;
+                               
 
-                    std::string redisSessionKey = "session_" + session.sessionKey;
-                    std::vector<std::pair<std::string, std::string>> sessionFields = {
-                        {"playerId", std::to_string(session.playerId)},
-                        {"username", session.username},
-                        {"charId", std::to_string(session.charId)},
-                        {"sessionKey", session.sessionKey},
-                        {"fd", std::to_string(clientSock)}
-                    };
-                    redis.hset(redisSessionKey, sessionFields);
-                    resp.resultCode = 0;
-                    std::memset(resp.gameServerAddress, 0, sizeof(resp.gameServerAddress));
-                    std::strncpy(resp.gameServerAddress, gameIp.c_str(), sizeof(resp.gameServerAddress) - 1);
-                    resp.gameServerPort = gamePort;
-                    LOG_DEBUG("CharSelect success: charId=" + std::to_string(charId) + ", gameServer=" + gameIp + ":" + std::to_string(gamePort));
-                    sendToClient(&resp, sizeof(resp), clientSock);
+                                int maxPlayers = fields.count("max_players") ? std::stoi(fields["max_players"]) : 0;
+                                int currentPlayers = fields.count("current_players") ? std::stoi(fields["current_players"]) : 0;
+                                if (maxPlayers == 0 || currentPlayers < maxPlayers) {
+                                    selectedGameIp = ip;
+                                    selectedGamePort = port;
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if (!found) {
+                                LOG_ERROR("No available game server found for char select!");
+                                resp.resultCode = 2; // Custom code: no available server
+                                std::memset(resp.gameServerAddress, 0, sizeof(resp.gameServerAddress));
+                                resp.gameServerPort = 0;
+                                sendToClient(&resp, sizeof(resp), clientSock);
+                                break;
+                            }
+                            session.charId = charId;
+                            std::string redisSessionKey = "session_" + session.sessionKey;
+                            std::vector<std::pair<std::string, std::string>> sessionFields = {
+                                {"playerId", std::to_string(session.playerId)},
+                                {"username", session.username},
+                                {"charId", std::to_string(session.charId)},
+                                {"sessionKey", session.sessionKey},
+                                {"fd", std::to_string(clientSock)}
+                            };
+                            redis.hset(redisSessionKey, sessionFields);
+                            resp.resultCode = 0;
+                            std::memset(resp.gameServerAddress, 0, sizeof(resp.gameServerAddress));
+                            std::strncpy(resp.gameServerAddress, selectedGameIp.c_str(), sizeof(resp.gameServerAddress) - 1);
+                            resp.gameServerPort = selectedGamePort;
+                            LOG_DEBUG("CharSelect success: charId=" + std::to_string(charId) + ", gameServer=" + selectedGameIp + ":" + std::to_string(selectedGamePort));
+                            sendToClient(&resp, sizeof(resp), clientSock);
+                            break;
+                        } else {
+                            LOG_ERROR("Failed to query Redis for game servers!");
+                            resp.resultCode = 3; // Custom code: redis error
+                            std::memset(resp.gameServerAddress, 0, sizeof(resp.gameServerAddress));
+                            resp.gameServerPort = 0;
+                            sendToClient(&resp, sizeof(resp), clientSock);
+                            break;
+                        }
+                    }
                 }
                 break;
             }
@@ -309,10 +359,6 @@ public:
         snprintf(buf, sizeof(buf), "%016llx", (unsigned long long)id);
         return std::string(buf);
     }
-
-private:
-    std::map<intptr_t, SessionInfo> sessionMap_;
-    RedisClient redis;
 };
 
 int main(int argc, char** argv) {

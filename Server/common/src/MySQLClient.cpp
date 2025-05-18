@@ -1,5 +1,6 @@
 #include "MySQLClient.h"
 #include <mysql/mysql.h>
+#include "Log.h"
 
 MySQLClient::MySQLClient() : conn(nullptr) {}
 MySQLClient::~MySQLClient() { if (conn) mysql_close(conn); }

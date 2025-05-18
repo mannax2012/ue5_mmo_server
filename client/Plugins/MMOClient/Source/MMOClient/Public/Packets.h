@@ -8,6 +8,9 @@ enum PacketType : int16_t {
     PACKET_C_HEARTBEAT = 0,
     PACKET_S_HEARTBEAT = 1,
     PACKET_S_ERROR = 2,
+    PACKET_C_CONNECT_REQUEST = 3,
+    PACKET_S_CONNECT_RESULT = 4,
+    // Login/Auth/Char Select Packets (1000+)
     PACKET_C_LOGIN_REQUEST = 1000,
     PACKET_S_LOGIN_RESPONSE = 1001,
     PACKET_C_CHAR_CREATE = 1010,
@@ -18,6 +21,7 @@ enum PacketType : int16_t {
     PACKET_S_CHAR_DELETE_RESULT = 1031,
     PACKET_C_CHAR_LIST_REQUEST = 1040,
     PACKET_S_CHAR_LIST_RESULT = 1041,
+    // Game Packets (2000+)
     PACKET_C_MOVE = 2000,
     PACKET_S_MOVE = 2001,
     PACKET_C_COMBAT_ACTION = 2010,
@@ -26,6 +30,7 @@ enum PacketType : int16_t {
     PACKET_S_ITEM_LIST = 2030,
     PACKET_C_SHOP_BUY = 2040,
     PACKET_S_SHOP_BUY_RESULT = 2041,
+    // Chat Packets (5000+)
     PACKET_C_CHAT_MESSAGE = 5000,
     PACKET_S_CHAT_MESSAGE = 5001,
 
@@ -35,6 +40,19 @@ struct PacketHeader {
     PacketType packetId;
 };
 #pragma pack(push, 1) 
+
+struct C_ConnectRequest {
+    static constexpr PacketType PACKET_ID = PACKET_C_CONNECT_REQUEST;
+    PacketHeader header{PACKET_ID};
+    char sessionKey[64]; // Session key for authentication
+};
+
+struct S_ConnectResult {
+    static constexpr PacketType PACKET_ID = PACKET_S_CONNECT_RESULT;
+    PacketHeader header{PACKET_ID};
+    int8_t resultCode; // 0 = OK, 1 = fail
+};
+
 struct C_LoginRequest {
     PacketHeader header{PACKET_C_LOGIN_REQUEST};
     int32_t usernameLength;

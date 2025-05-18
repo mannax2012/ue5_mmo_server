@@ -15,7 +15,10 @@ struct FCharListEntry {
     UPROPERTY(BlueprintReadOnly)
     int32 ClassId; // Changed from int16 to int32 for Blueprint compatibility
 };
-
+struct FHeartbeatState {
+        FTimerHandle TimerHandle;
+        int32 LastReceivedTimestamp = 0;
+};
 UENUM(BlueprintType)
 enum class EMMOClientState : uint8 {
     DISCONNECTED     UMETA(DisplayName = "Disconnected"),
@@ -54,6 +57,13 @@ public:
 
     UFUNCTION(BlueprintCallable, Category = "MMOClient")
     void Shutdown();
+
+    UFUNCTION(BlueprintCallable, Category = "MMOClient")
+    void DisconnectAuth();
+    UFUNCTION(BlueprintCallable, Category = "MMOClient")
+    void DisconnectGame();
+    UFUNCTION(BlueprintCallable, Category = "MMOClient")
+    void DisconnectChat();
 
     DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnLoginResult, bool, bSuccess);
     UPROPERTY(BlueprintAssignable, Category = "MMOClient")
@@ -119,6 +129,11 @@ public:
     void SetClientState(EMMOClientState NewState);
     virtual void BeginDestroy() override;
 
+    UFUNCTION(BlueprintCallable, Category = "MMOClient|Session")
+    void SetSessionKey(const FString& InKey);
+    UFUNCTION(BlueprintCallable, Category = "MMOClient|Session")
+    FString GetSessionKey() const;
+
 private:
     TSharedPtr<class FSocket> AuthSocket;
     TSharedPtr<class FSocket> GameSocket;
@@ -126,6 +141,7 @@ private:
     int32 gameRetryCount = 0;
 
     FTimerHandle AuthRecvHandle, GameRecvHandle, ChatRecvHandle;
+    FTimerHandle HeartbeatTimerHandle;
     void OnReceive(TSharedPtr<FSocket> Socket, FString ServerType);
 
     void HandleAuthPacket(const TArray<uint8>& Data);
@@ -135,8 +151,26 @@ private:
     bool EncryptAndCompress(const TArray<uint8>& In, TArray<uint8>& Out);
     bool DecryptAndDecompress(const TArray<uint8>& In, TArray<uint8>& Out);
 
-    
     void TickSockets();
+    void StartHeartbeat();
+    void StopHeartbeat();
+    void SendHeartbeat();
+
+    constexpr static float HEARTBEAT_INTERVAL = 5.0f;
+    constexpr static float HEARTBEAT_TIMEOUT = 12.0f;
+
+    
+
+    // Per-socket heartbeat state (defined as static in .cpp)
+    static FHeartbeatState AuthHeartbeat;
+    static FHeartbeatState GameHeartbeat;
+    static FHeartbeatState ChatHeartbeat;
+
+    void StartHeartbeatForSocket(const FString& SocketType);
+    void StopHeartbeatForSocket(const FString& SocketType);
+    void SendHeartbeat(const FString& SocketType);
+    void CheckHeartbeatTimeout(const FString& SocketType, FHeartbeatState& State);
+
     // Store last used host/port for Auth and Game
     FString LastAuthHost;
     int32 LastAuthPort = 0;
@@ -144,4 +178,6 @@ private:
     int32 LastGamePort = 0;
 
     FTimerHandle TickTimerHandle;
+    FString SessionKey;
+    
 };

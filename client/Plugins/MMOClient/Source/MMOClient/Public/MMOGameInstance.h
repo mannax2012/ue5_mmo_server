@@ -8,9 +8,6 @@ class MMOCLIENT_API UMMOGameInstance : public UGameInstance
     GENERATED_BODY()
 public:
     UPROPERTY(BlueprintReadOnly)
-    FString SessionKey;
-
-    UPROPERTY(BlueprintReadOnly)
     UMMOClient* MMOClient;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="MMO|Auth")
@@ -19,10 +16,6 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="MMO|Auth")
     int32 AuthServerPort = 5000;
 
-    UFUNCTION(BlueprintCallable)
-    void SetSessionKey(const FString& InKey) { SessionKey = InKey; }
-    UFUNCTION(BlueprintCallable)
-    FString GetSessionKey() const { return SessionKey; }
     UFUNCTION(BlueprintCallable)
     UMMOClient* GetMMOClient() const { return MMOClient; }
 

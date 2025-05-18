@@ -10,6 +10,8 @@ enum PacketType : int16_t {
     PACKET_C_HEARTBEAT = 0,
     PACKET_S_HEARTBEAT = 1,
     PACKET_S_ERROR = 2,
+    PACKET_C_CONNECT_REQUEST = 3,
+    PACKET_S_CONNECT_RESULT = 4,
 
     // Login/Auth/Char Select Packets (1000+)
     PACKET_C_LOGIN_REQUEST = 1000,
@@ -40,6 +42,40 @@ enum PacketType : int16_t {
     
 };
 
+// Helper to get packet type name as string
+inline const char* PacketTypeToString(int16_t packetId) {
+    switch (packetId) {
+        case PACKET_C_HEARTBEAT: return "PACKET_C_HEARTBEAT";
+        case PACKET_S_HEARTBEAT: return "PACKET_S_HEARTBEAT";
+        case PACKET_S_ERROR: return "PACKET_S_ERROR";
+        case PACKET_C_LOGIN_REQUEST: return "PACKET_C_LOGIN_REQUEST";
+        case PACKET_S_LOGIN_RESPONSE: return "PACKET_S_LOGIN_RESPONSE";
+        case PACKET_C_CHAR_CREATE: return "PACKET_C_CHAR_CREATE";
+        case PACKET_S_CHAR_CREATE_RESULT: return "PACKET_S_CHAR_CREATE_RESULT";
+        case PACKET_C_CHAR_SELECT: return "PACKET_C_CHAR_SELECT";
+        case PACKET_S_CHAR_SELECT_RESULT: return "PACKET_S_CHAR_SELECT_RESULT";
+        case PACKET_C_CHAR_DELETE: return "PACKET_C_CHAR_DELETE";
+        case PACKET_S_CHAR_DELETE_RESULT: return "PACKET_S_CHAR_DELETE_RESULT";
+        case PACKET_C_CHAR_LIST_REQUEST: return "PACKET_C_CHAR_LIST_REQUEST";
+        case PACKET_S_CHAR_LIST_RESULT: return "PACKET_S_CHAR_LIST_RESULT";
+        case PACKET_C_MOVE: return "PACKET_C_MOVE";
+        case PACKET_S_MOVE: return "PACKET_S_MOVE";
+        case PACKET_C_COMBAT_ACTION: return "PACKET_C_COMBAT_ACTION";
+        case PACKET_S_COMBAT_RESULT: return "PACKET_S_COMBAT_RESULT";
+        case PACKET_S_NPC_SPAWN: return "PACKET_S_NPC_SPAWN";
+        case PACKET_S_ITEM_LIST: return "PACKET_S_ITEM_LIST";
+        case PACKET_C_SHOP_BUY: return "PACKET_C_SHOP_BUY";
+        case PACKET_S_SHOP_BUY_RESULT: return "PACKET_S_SHOP_BUY_RESULT";
+        case PACKET_C_CHAT_MESSAGE: return "PACKET_C_CHAT_MESSAGE";
+        case PACKET_S_CHAT_MESSAGE: return "PACKET_S_CHAT_MESSAGE";
+        case PACKET_C_CONNECT_REQUEST: return "PACKET_C_CONNECT_REQUEST";
+        case PACKET_S_CONNECT_RESULT: return "PACKET_S_CONNECT_RESULT";
+        default: return "UNKNOWN_PACKET";
+    }
+}
+
+
+
 // Packet header for all packets
 struct PacketHeader {
     PacketType packetId; // Unique ID for each packet type
@@ -47,6 +83,20 @@ struct PacketHeader {
 
 #pragma pack(push, 1)
 // All packets must be structs, no functions, no unsigned types
+
+struct C_ConnectRequest {
+    static constexpr PacketType PACKET_ID = PACKET_C_CONNECT_REQUEST;
+    PacketHeader header{PACKET_ID};
+    char sessionKey[64]; // Session key for authentication
+};
+
+struct S_ConnectResult {
+    static constexpr PacketType PACKET_ID = PACKET_S_CONNECT_RESULT;
+    PacketHeader header{PACKET_ID};
+    int8_t resultCode; // 0 = OK, 1 = fail
+};
+
+
 // Example packet: Login request from client
 struct C_LoginRequest {
     static constexpr PacketType PACKET_ID = PACKET_C_LOGIN_REQUEST;
@@ -267,6 +317,7 @@ inline bool DeserializePacketRaw(const std::vector<uint8_t>& data, void* out, si
     std::memcpy(out, data.data(), size);
     return true;
 }
+
 
 // Static asserts for struct size validation
 static_assert(sizeof(PacketHeader) == 2, "PacketHeader size mismatch!");

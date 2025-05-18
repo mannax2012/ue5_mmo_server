@@ -3,6 +3,7 @@
 #include "RedisClient.h"
 #include "SocketServer.h"
 #include "MySQLClient.h" // Include MySQLClient header
+#include "Packets.h"
 #include <string>
 #include <atomic>
 #include <thread>
@@ -11,6 +12,16 @@
 #include <iostream>
 #include <unordered_map>
 #include <random>
+#include <chrono>
+
+struct SessionInfo {
+    bool connected = true;
+    std::chrono::steady_clock::time_point lastHeartbeat;
+    int32_t playerId = -1;
+    int32_t charId = -1;
+    std::string username;
+    std::string sessionKey;
+};
 
 class BaseServer {
 public:
@@ -19,12 +30,16 @@ public:
     static void SignalHandlerStatic(int signal);
     SocketServer* getSocketServer() { return server; }
 
-    // New: TCP session management hooks
-    virtual void onClientConnected(intptr_t clientSock) {}
+    // TCP session management hooks
+    virtual void onClientConnected(intptr_t clientSock);
     virtual void onClientDisconnected(intptr_t clientSock);
-    virtual void handlePacket(const std::vector<uint8_t>& data, intptr_t clientSock) = 0;
+    virtual void handlePacket(const PacketHeader& header, const std::vector<uint8_t>& data, intptr_t clientSock) = 0;
 
     void sendToClient(const void* packet, size_t size, intptr_t clientSock);
+
+    // Heartbeat constants
+    static constexpr int HEARTBEAT_INTERVAL_SEC = 5;
+    static constexpr int HEARTBEAT_TIMEOUT_SEC = 12;
 
 protected:
     bool loadConfig(int argc, char** argv);
@@ -46,10 +61,14 @@ protected:
     std::string redisKey;
     int num_sessions;
     bool mysqlConnected = false; // NEW: shared connection state
-    std::unordered_map<intptr_t, bool> sessionMap; // Track connected clients
+    std::unordered_map<intptr_t, SessionInfo> sessionMap; // Track connected clients and heartbeat
 
     static std::string GenerateUniqueId();
     static void RegisterServerInRedis(RedisClient& redis, const std::string& key, const std::string& ip, int port, int num_sessions);
+
+    // Heartbeat helpers
+    void handleHeartbeatPacket(const std::vector<uint8_t>& data, intptr_t clientSock);
+    void checkHeartbeatTimeouts();
 };
 
 // Inline static member definition for header-only usage

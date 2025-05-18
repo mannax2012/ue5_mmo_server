@@ -50,6 +50,21 @@ public:
     void setPacketHandler(SocketPacketHandler handler) override {
         this->handler = handler;
     }
+    void setConnectionHandler(SocketConnectionHandler onConnect, SocketConnectionHandler onDisconnect) override {
+        this->onConnect = onConnect;
+        this->onDisconnect = onDisconnect;
+    }
+    void disconnect(intptr_t clientSock) override {
+        auto it = clients.find(clientSock);
+        if (it != clients.end()) {
+            boost::system::error_code ec;
+            it->second->shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
+            it->second->close(ec);
+            clients.erase(it);
+            if (onDisconnect) onDisconnect(clientSock);
+            LOG_DEBUG("SocketServerImpl: Disconnected client fd=" + std::to_string(clientSock));
+        }
+    }
 private:
     void doAccept() {
         auto socket = std::make_shared<boost::asio::ip::tcp::socket>(ioContext);
@@ -57,6 +72,7 @@ private:
             if (!ec && running) {
                 intptr_t sockId = reinterpret_cast<intptr_t>(socket.get());
                 clients[sockId] = socket;
+                if (onConnect) onConnect(sockId);
                 doRead(socket, sockId);
             }
             if (running) doAccept();
@@ -72,6 +88,7 @@ private:
                     doRead(socket, sockId);
                 } else {
                     clients.erase(sockId);
+                    if (onDisconnect) onDisconnect(sockId);
                 }
             });
     }
@@ -81,6 +98,8 @@ private:
     std::vector<std::thread> threads;
     std::map<intptr_t, std::shared_ptr<boost::asio::ip::tcp::socket>> clients;
     SocketPacketHandler handler;
+    SocketConnectionHandler onConnect;
+    SocketConnectionHandler onDisconnect;
 };
 
 SocketServer* CreateSocketServer() { return new SocketServerImpl(); }

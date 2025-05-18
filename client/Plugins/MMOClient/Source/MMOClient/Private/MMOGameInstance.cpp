@@ -51,8 +51,8 @@ void UMMOGameInstance::CreateCharacter(const FString& Name, int32 ClassId)
         C_CharCreate Packet;
         FMemory::Memzero(&Packet, sizeof(Packet));
         Packet.header.packetId = PACKET_C_CHAR_CREATE;
-        Packet.nameLength = FMath::Min(Name.Len(), 31);
-        FCStringAnsi::Strncpy(Packet.name, TCHAR_TO_ANSI(*Name), Packet.nameLength);
+        FCStringAnsi::Strncpy(Packet.name, TCHAR_TO_UTF8(*Name), sizeof(Packet.name) - 1);
+        Packet.nameLength = FCStringAnsi::Strlen(Packet.name);
         Packet.classId = ClassId;
         MMOClient->SendToAuth(TArray<uint8>((uint8*)&Packet, sizeof(Packet)));
     }

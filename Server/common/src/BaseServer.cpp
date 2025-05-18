@@ -7,6 +7,7 @@
 #include <csignal>
 #include <sstream> // NEW: Include sstream for std::ostringstream
 #include <nlohmann/json.hpp>
+#include <cstring> // NEW: Include cstring for std::memset
 
 using nlohmann::json;
 
@@ -36,22 +37,37 @@ void BaseServer::connectMySQLWithRetry() {
 }
 
 int BaseServer::run(int argc, char** argv) {
-   // std::signal(SIGINT, SignalHandlerStatic);
-   // std::signal(SIGTERM, SignalHandlerStatic);
+    uniqueId = GenerateUniqueId();
+    redisKey = serverType + "_" + uniqueId;
+    // Generate timestamp string: YYYYMMDD_HH_MM
+    std::time_t t = std::time(nullptr);
+    std::tm tm;
+    localtime_r(&t, &tm);
+    char timebuf[32];
+    std::strftime(timebuf, sizeof(timebuf), "%Y%m%d_%H_%M", &tm);
+    SetLogFileName(serverType + "_" + uniqueId + "_" + timebuf + ".log");
     if (!loadConfig(argc, argv)) return 1;
     if (!startSocket()) return 1;
     connectRedisWithRetry();
-    connectMySQLWithRetry(); // NEW: connect to MySQL on startup
-    uniqueId = GenerateUniqueId();
-    redisKey = serverType + "_" + uniqueId;
-    // Always set the packet handler to decrypt/decompress before dispatch
-    server->setPacketHandler([this](const std::vector<uint8_t>& d, intptr_t clientSock) {
-        if (sessionMap.find(clientSock) == sessionMap.end()) {
-            sessionMap[clientSock] = true;
+    connectMySQLWithRetry(); // connect to MySQL on startup
+    // Register connection/disconnection handlers
+    server->setConnectionHandler(
+        [this](intptr_t clientSock) {
+            SessionInfo info;
+            info.connected = true;
+            info.lastHeartbeat = std::chrono::steady_clock::now();
+            sessionMap[clientSock] = info;
             onClientConnected(clientSock);
             num_sessions = (int)sessionMap.size();
             LOG_INFO(std::string("Client connected: fd=") + std::to_string(clientSock));
+        },
+        [this](intptr_t clientSock) {
+            onClientDisconnected(clientSock);
         }
+    );
+    // Always set the packet handler to decrypt/decompress before dispatch
+    server->setPacketHandler([this](const std::vector<uint8_t>& d, intptr_t clientSock) {
+        // No connection logic here, only packet handling
         // Log incoming encrypted/compressed packet
         {
             std::ostringstream oss;
@@ -84,7 +100,17 @@ int BaseServer::run(int argc, char** argv) {
             LOG_ERROR(std::string("Decompressed packet too small from fd=") + std::to_string(clientSock) + ". Dropping packet.");
             return;
         }
-        handlePacket(decompressed, clientSock);
+        //Unpack the packet header
+        PacketHeader header;
+        std::memcpy(&header, decompressed.data(), sizeof(PacketHeader));
+        const char* packetName = PacketTypeToString(header.packetId);
+        LOG_DEBUG("Received packet from fd=" + std::to_string(clientSock) + ", packetId=" + std::to_string(header.packetId) + " (" + packetName + "), size=" + std::to_string(decompressed.size()));
+        // Check for heartbeat packet
+        if (header.packetId == PACKET_C_HEARTBEAT) {
+            handleHeartbeatPacket(decompressed, clientSock);
+            return;
+        }
+        handlePacket(header,decompressed, clientSock);
     });
     mainLoop();
     LOG_DEBUG("mainLoop() is returning.");
@@ -97,7 +123,7 @@ void BaseServer::SignalHandlerStatic(int signal) {
 }
 
 bool BaseServer::loadConfig(int argc, char** argv) {
-    configPath = getConfigPathFromArgs(argc, argv);
+    configPath = getConfigPathFromArgs(argc, argv, "../common/" +serverType + ".cfg");
     if (!config.load(configPath)) {
         LOG_ERROR(std::string("Failed to load config: ") + configPath);
         return false;
@@ -110,6 +136,32 @@ bool BaseServer::loadConfig(int argc, char** argv) {
     } else {
         SetLogLevel(LogLevel::DEBUG);
         LOG_INFO("Log level defaulted to DEBUG");
+    }
+
+    // Set log file options from config if present
+    bool LOG_TO_FILE = config.getInt("log_to_file") > 0;
+    if (LOG_TO_FILE) {
+       
+        std::string logFileLevel = config.get("log_file_level");
+        if (!logFileLevel.empty()) {
+            SetFileLogLevel(LogLevelFromString(logFileLevel));
+            LOG_INFO("Log file level set from config: " + logFileLevel);
+        } else {
+            SetFileLogLevel(LogLevel::DEBUG);
+            LOG_INFO("Log file level defaulted to DEBUG");
+        }
+        std::string logFileDir = config.get("log_file_dir");
+        if (logFileDir.empty()) {
+            logFileDir = "./logs";
+            LOG_INFO("Log file directory defaulted to: " + logFileDir);
+        }
+        SetLogToFile(true);
+        SetLogFileDir(logFileDir);
+        
+        LOG_INFO("Logging to file: " + logFileDir + "/" + GetLogFileName());
+    } else {
+        SetLogToFile(false);
+        LOG_INFO("Logging to console only.");
     }
     LOG_INFO("[" + serverType + "] Starting with config: " + configPath);
     return true;
@@ -149,6 +201,42 @@ void BaseServer::connectRedisWithRetry() {
     }
 }
 
+void BaseServer::handleHeartbeatPacket(const std::vector<uint8_t>& data, intptr_t clientSock) {
+    if (data.size() < sizeof(C_Heartbeat)) return;
+    const C_Heartbeat* pkt = reinterpret_cast<const C_Heartbeat*>(data.data());
+    // Update last heartbeat time in sessionMap
+    auto it = sessionMap.find(clientSock);
+    if (it != sessionMap.end()) {
+        if(!it->second.sessionKey.empty()) {
+           LOG_DEBUG("Received heartbeat from client fd=" + std::to_string(clientSock) + ", sessionKey=" + it->second.sessionKey);
+           redis.expire("session_" + it->second.sessionKey, HEARTBEAT_TIMEOUT_SEC + 1); // Update Redis session expiration
+           it->second.lastHeartbeat = std::chrono::steady_clock::now();
+            // Respond with S_Heartbeat
+            S_Heartbeat resp;
+            std::memset(&resp, 0, sizeof(resp));
+            resp.header.packetId = PACKET_S_HEARTBEAT;
+            resp.timestamp = static_cast<int32_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+            sendToClient(&resp, sizeof(resp), clientSock);
+        }
+    }
+    
+}
+
+void BaseServer::checkHeartbeatTimeouts() {
+    auto now = std::chrono::steady_clock::now();
+    std::vector<intptr_t> toDisconnect;
+    for (const auto& kv : sessionMap) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - kv.second.lastHeartbeat).count();
+        if (elapsed > HEARTBEAT_TIMEOUT_SEC) {
+            toDisconnect.push_back(kv.first);
+        }
+    }
+    for (intptr_t sock : toDisconnect) {
+        LOG_ERROR("Heartbeat timeout for client fd=" + std::to_string(sock) + ". Disconnecting.");
+        if (server) server->disconnect(sock); // Close the socket
+    }
+}
+
 void BaseServer::mainLoop() {
     int port = config.getInt("bind_port");
     std::string ip = config.get("bind_ip");
@@ -176,7 +264,7 @@ void BaseServer::mainLoop() {
         }
         
         num_sessions = (int)sessionMap.size();
-       
+        checkHeartbeatTimeouts();
         // Update Redis every 15 seconds
         if (std::chrono::steady_clock::now() - lastRedisUpdate >= std::chrono::seconds(15)) {
             RegisterServerInRedis(redis, redisKey, ip, port, num_sessions);
@@ -226,14 +314,30 @@ void BaseServer::sendToClient(const void* packet, size_t size, intptr_t clientSo
     std::vector<uint8_t> out = SerializePacketRaw(packet, size);
     {
         std::ostringstream oss;
-        oss << "Sending packet to fd=" << clientSock << ", size=" << out.size() << ": ";
+        int16_t packetId = -1;
+        const char* packetName = "UNKNOWN_PACKET";
+        if (size >= sizeof(PacketHeader)) {
+            packetId = reinterpret_cast<const PacketHeader*>(packet)->packetId;
+            packetName = PacketTypeToString(packetId);
+        }
+        oss << "Sending packet to fd=" << clientSock << ", size=" << out.size() << ", packetId=" << packetId << " (" << packetName << "): ";
         for (auto b : out) oss << std::hex << (int)b << " ";
         LOG_DEBUG(oss.str());
     }
     server->send(out, clientSock);
 }
 
+void BaseServer::onClientConnected(intptr_t clientSock) {
+    // Send S_Heartbeat immediately on connection
+    S_Heartbeat resp;
+    std::memset(&resp, 0, sizeof(resp));
+    resp.header.packetId = PACKET_S_HEARTBEAT;
+    resp.timestamp = static_cast<int32_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+    sendToClient(&resp, sizeof(resp), clientSock);
+}
+
 void BaseServer::onClientDisconnected(intptr_t clientSock) {
+    LOG_DEBUG("Client disconnected: fd=" + std::to_string(clientSock));
     sessionMap.erase(clientSock);
     num_sessions = (int)sessionMap.size();
 }
