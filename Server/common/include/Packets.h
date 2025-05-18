@@ -18,6 +18,10 @@ enum PacketType : int16_t {
     PACKET_S_CHAR_CREATE_RESULT = 1011,
     PACKET_C_CHAR_SELECT = 1020,
     PACKET_S_CHAR_SELECT_RESULT = 1021,
+    PACKET_C_CHAR_DELETE = 1030,
+    PACKET_S_CHAR_DELETE_RESULT = 1031,
+    PACKET_C_CHAR_LIST_REQUEST = 1040,
+    PACKET_S_CHAR_LIST_RESULT = 1041,
 
     // Game Packets (2000+)
     PACKET_C_MOVE = 2000,
@@ -31,7 +35,9 @@ enum PacketType : int16_t {
 
     // Chat Packets (5000+)
     PACKET_C_CHAT_MESSAGE = 5000,
-    PACKET_S_CHAT_MESSAGE = 5001
+    PACKET_S_CHAT_MESSAGE = 5001,
+
+    
 };
 
 // Packet header for all packets
@@ -88,6 +94,19 @@ struct S_CharSelectResult {
     int8_t resultCode; // 0 = OK, 1 = fail
     char gameServerAddress[64];
     int32_t gameServerPort;
+};
+
+struct C_CharDelete {
+    static constexpr PacketType PACKET_ID = PACKET_C_CHAR_DELETE;
+    PacketHeader header{PACKET_ID};
+    int32_t charId;
+};
+
+struct S_CharDeleteResult {
+    static constexpr PacketType PACKET_ID = PACKET_S_CHAR_DELETE_RESULT;
+    PacketHeader header{PACKET_ID};
+    int8_t resultCode; // 0 = OK, 1 = fail
+    int32_t charId;
 };
 
 // Game Packets
@@ -175,6 +194,28 @@ struct S_ChatMessage {
     int32_t toId;
     int16_t messageLength;
     char message[256];
+};
+
+// Character List Packets
+struct C_CharListRequest {
+    static constexpr PacketType PACKET_ID = PACKET_C_CHAR_LIST_REQUEST;
+    PacketHeader header{PACKET_ID};
+    // No additional fields needed
+};
+
+// Character info for list
+struct CharListEntry {
+    int32_t charId;
+    char name[32];
+    int16_t classId;
+    // Add more fields as needed (level, etc)
+};
+
+struct S_CharListResult {
+    static constexpr PacketType PACKET_ID = PACKET_S_CHAR_LIST_RESULT;
+    PacketHeader header{PACKET_ID};
+    int8_t charCount;
+    CharListEntry entries[8]; // Max 8 characters per account, adjust as needed
 };
 
 // Heartbeat/Connection

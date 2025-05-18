@@ -14,6 +14,10 @@ enum PacketType : int16_t {
     PACKET_S_CHAR_CREATE_RESULT = 1011,
     PACKET_C_CHAR_SELECT = 1020,
     PACKET_S_CHAR_SELECT_RESULT = 1021,
+     PACKET_C_CHAR_DELETE = 1030,
+    PACKET_S_CHAR_DELETE_RESULT = 1031,
+    PACKET_C_CHAR_LIST_REQUEST = 1040,
+    PACKET_S_CHAR_LIST_RESULT = 1041,
     PACKET_C_MOVE = 2000,
     PACKET_S_MOVE = 2001,
     PACKET_C_COMBAT_ACTION = 2010,
@@ -23,7 +27,8 @@ enum PacketType : int16_t {
     PACKET_C_SHOP_BUY = 2040,
     PACKET_S_SHOP_BUY_RESULT = 2041,
     PACKET_C_CHAT_MESSAGE = 5000,
-    PACKET_S_CHAT_MESSAGE = 5001
+    PACKET_S_CHAT_MESSAGE = 5001,
+
 };
 
 struct PacketHeader {
@@ -63,6 +68,19 @@ struct S_CharSelectResult {
     int8_t resultCode;
     char gameServerAddress[64];
     int32_t gameServerPort;
+};
+
+struct C_CharDelete {
+    static constexpr PacketType PACKET_ID = PACKET_C_CHAR_DELETE;
+    PacketHeader header{PACKET_ID};
+    int32_t charId;
+};
+
+struct S_CharDeleteResult {
+    static constexpr PacketType PACKET_ID = PACKET_S_CHAR_DELETE_RESULT;
+    PacketHeader header{PACKET_ID};
+    int8_t resultCode; // 0 = OK, 1 = fail
+    int32_t charId;
 };
 struct C_Move {
     PacketHeader header{PACKET_C_MOVE};
@@ -135,6 +153,25 @@ struct S_Error {
     PacketHeader header{PACKET_S_ERROR};
     int16_t errorCode;
     char errorMsg[128];
+};
+
+// Character List Packets (for client)
+struct C_CharListRequest {
+    PacketHeader header{PACKET_C_CHAR_LIST_REQUEST};
+    // No additional fields needed
+};
+
+struct CharListEntry {
+    int32 CharId;
+    char Name[32];
+    int16 ClassId;
+    // Add more fields as needed (level, etc)
+};
+
+struct S_CharListResult {
+    PacketHeader header{PACKET_S_CHAR_LIST_RESULT};
+    int8 CharCount;
+    CharListEntry Entries[8]; // Max 8 characters per account, adjust as needed
 };
 #pragma pack(pop)
 static const std::vector<uint8_t> PACKET_CRYPTO_KEY = {

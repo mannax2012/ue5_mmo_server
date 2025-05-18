@@ -8,11 +8,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_library(common STATIC
     common/src/BaseServer.cpp
     common/src/Config.cpp
-    common/src/Database.cpp
     common/src/MySQLClient.cpp
     common/src/RedisClient.cpp
     common/src/Security.cpp
     common/src/SocketServer.cpp
+    common/src/Log.cpp
 )
 target_include_directories(common PUBLIC common/include)
 

@@ -29,6 +29,18 @@ public:
     UFUNCTION(BlueprintCallable, Category = "MMO|Auth")
     void Login(const FString& Username, const FString& Password);
 
+    UFUNCTION(BlueprintCallable, Category = "MMO|Char")
+    void CreateCharacter(const FString& Name, int32 ClassId);
+
+    UFUNCTION(BlueprintCallable, Category = "MMO|Char")
+    void DeleteCharacter(int32 CharId);
+
+    UFUNCTION(BlueprintCallable, Category = "MMO|Char")
+    void ListCharacters();
+
+    UFUNCTION(BlueprintCallable, Category = "MMO|Char")
+    void SelectCharacter(int32 CharId);
+
     virtual void Init() override;
     virtual void Shutdown() override;
 };

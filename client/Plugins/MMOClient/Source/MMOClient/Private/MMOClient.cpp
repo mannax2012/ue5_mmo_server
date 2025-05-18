@@ -18,6 +18,7 @@ THIRD_PARTY_INCLUDES_END
 #undef UI
 #include "Compression/lz4.h"
 #include <Logging/LogMacros.h>
+#include "MMOClientDelegates.h"
 
 // Define a log category for MMOClient
 DEFINE_LOG_CATEGORY_STATIC(LogMMOClient, Log, All);
@@ -130,19 +131,30 @@ static bool DecompressLZ4(const TArray<uint8>& In, TArray<uint8>& Out, int32 /*U
 // --- MMOClient implementation ---
 void UMMOClient::ConnectAuth(const FString& Host, int32 Port)
 {
+    LastAuthHost = Host;
+    LastAuthPort = Port;
     UE_LOG(LogMMOClient, Log, TEXT("Connecting to Auth server: %s:%d"), *Host, Port);
     ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
     AuthSocket = MakeShareable(SocketSubsystem->CreateSocket(NAME_Stream, TEXT("AuthSocket"), false));
+    AuthSocket->SetNonBlocking(true); // Ensure non-blocking mode for safe disconnect detection
     TSharedRef<FInternetAddr> Addr = SocketSubsystem->CreateInternetAddr();
     bool bIsValid = false;
     Addr->SetIp(*Host, bIsValid);
     Addr->SetPort(Port);
+    SetClientState(EMMOClientState::CONNECTING_AUTH);
+    UWorld* World = GetWorld();
+    if (!World) {
+        UE_LOG(LogMMOClient, Error, TEXT("GetWorld() returned nullptr!"));
+        return;
+    }
     if (AuthSocket->Connect(*Addr))
     {
         UE_LOG(LogMMOClient, Log, TEXT("Auth connection established."));
-        if (UWorld* World = GetWorld()) {
+        OnAuthConnected.Broadcast();
+        if (World) {
             World->GetTimerManager().SetTimer(AuthRecvHandle, [this]() { OnReceive(AuthSocket, TEXT("Auth")); }, 0.01f, true);
             UE_LOG(LogMMOClient, Log, TEXT("Auth receive timer set!"));
+            SetClientState(EMMOClientState::AUTH);
         } else {
             UE_LOG(LogMMOClient, Error, TEXT("GetWorld() returned nullptr, timer not set!"));
         }
@@ -150,31 +162,50 @@ void UMMOClient::ConnectAuth(const FString& Host, int32 Port)
     else {
         UE_LOG(LogMMOClient, Error, TEXT("Failed to connect to Auth server."));
         AuthSocket.Reset();
+        OnAuthDisconnected.Broadcast();
+        //SetClientState(EMMOClientState::DISCONNECTED);
+    }
+    if (!World->GetTimerManager().IsTimerActive(TickTimerHandle))
+    {
+        World->GetTimerManager().SetTimer(TickTimerHandle, this, &UMMOClient::TickSockets, 1.0f, true);
+        UE_LOG(LogMMOClient, Log, TEXT("TickTimer started successfully."));
     }
 }
 
 void UMMOClient::ConnectGame(const FString& Host, int32 Port)
 {
+    LastGameHost = Host;
+    LastGamePort = Port;
     UE_LOG(LogMMOClient, Log, TEXT("Connecting to Game server: %s:%d"), *Host, Port);
     ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
     GameSocket = MakeShareable(SocketSubsystem->CreateSocket(NAME_Stream, TEXT("GameSocket"), false));
+    GameSocket->SetNonBlocking(true); // Ensure non-blocking mode for safe disconnect detection
     TSharedRef<FInternetAddr> Addr = SocketSubsystem->CreateInternetAddr();
     bool bIsValid = false;
     Addr->SetIp(*Host, bIsValid);
     Addr->SetPort(Port);
+    SetClientState(EMMOClientState::CONNECTING_GAME);
     if (GameSocket->Connect(*Addr))
     {
         UE_LOG(LogMMOClient, Log, TEXT("Game connection established."));
+        OnGameConnected.Broadcast();
         if (UWorld* World = GetWorld()) {
+            SetClientState(EMMOClientState::GAME);
             World->GetTimerManager().SetTimer(GameRecvHandle, [this]() { OnReceive(GameSocket, TEXT("Game")); }, 0.01f, true);
+            
             UE_LOG(LogMMOClient, Log, TEXT("Game receive timer set!"));
         } else {
             UE_LOG(LogMMOClient, Error, TEXT("GetWorld() returned nullptr, timer not set!"));
         }
     }
     else {
+        // If the connection fails, reset the socket and notify the disconnection
+        // This is important to avoid dangling pointers and ensure proper cleanup
+        // before attempting to reconnect or handle the error
         UE_LOG(LogMMOClient, Error, TEXT("Failed to connect to Game server."));
         GameSocket.Reset();
+        OnGameDisconnected.Broadcast();
+        SetClientState(EMMOClientState::CONNECTING_AUTH);
     }
 }
 
@@ -183,13 +214,16 @@ void UMMOClient::ConnectChat(const FString& Host, int32 Port)
     UE_LOG(LogMMOClient, Log, TEXT("Connecting to Chat server: %s:%d"), *Host, Port);
     ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
     ChatSocket = MakeShareable(SocketSubsystem->CreateSocket(NAME_Stream, TEXT("ChatSocket"), false));
+    ChatSocket->SetNonBlocking(true); // Ensure non-blocking mode for safe disconnect detection
     TSharedRef<FInternetAddr> Addr = SocketSubsystem->CreateInternetAddr();
     bool bIsValid = false;
     Addr->SetIp(*Host, bIsValid);
     Addr->SetPort(Port);
+
     if (ChatSocket->Connect(*Addr))
     {
         UE_LOG(LogMMOClient, Log, TEXT("Chat connection established."));
+        OnChatConnected.Broadcast();
         if (UWorld* World = GetWorld()) {
             World->GetTimerManager().SetTimer(ChatRecvHandle, [this]() { OnReceive(ChatSocket, TEXT("Chat")); }, 0.01f, true);
             UE_LOG(LogMMOClient, Log, TEXT("Chat receive timer set!"));
@@ -200,6 +234,7 @@ void UMMOClient::ConnectChat(const FString& Host, int32 Port)
     else {
         UE_LOG(LogMMOClient, Error, TEXT("Failed to connect to Chat server."));
         ChatSocket.Reset();
+        OnChatDisconnected.Broadcast();
     }
 }
 
@@ -231,14 +266,14 @@ void UMMOClient::SendToChat(const TArray<uint8>& Data)
 void UMMOClient::DisconnectAll()
 {
     UE_LOG(LogMMOClient, Log, TEXT("Disconnecting all sockets."));
-    if (AuthSocket.IsValid()) { AuthSocket->Close(); AuthSocket.Reset(); }
-    if (GameSocket.IsValid()) { GameSocket->Close(); GameSocket.Reset(); }
-    if (ChatSocket.IsValid()) { ChatSocket->Close(); ChatSocket.Reset(); }
-    if (GWorld)
+    if (AuthSocket.IsValid()) { AuthSocket->Close(); AuthSocket.Reset(); OnAuthDisconnected.Broadcast(); }
+    if (GameSocket.IsValid()) { GameSocket->Close(); GameSocket.Reset(); OnGameDisconnected.Broadcast(); }
+    if (ChatSocket.IsValid()) { ChatSocket->Close(); ChatSocket.Reset(); OnChatDisconnected.Broadcast(); }
+    if (UWorld* World = GetWorld())
     {
-        GWorld->GetTimerManager().ClearTimer(AuthRecvHandle);
-        GWorld->GetTimerManager().ClearTimer(GameRecvHandle);
-        GWorld->GetTimerManager().ClearTimer(ChatRecvHandle);
+        World->GetTimerManager().ClearTimer(AuthRecvHandle);
+        World->GetTimerManager().ClearTimer(GameRecvHandle);
+        World->GetTimerManager().ClearTimer(ChatRecvHandle);
     }
 }
 
@@ -282,10 +317,10 @@ void UMMOClient::HandleAuthPacket(const TArray<uint8>& Data)
             S_LoginResponse resp;
             if (DeserializeStruct(Data, resp)) {
                 bool bSuccess = resp.resultCode == 0;
-                UE_LOG(LogMMOClient, Log, TEXT("Login response received. Success: %s"), bSuccess ? TEXT("true") : TEXT("false"));
+                UE_LOG(LogMMOClient, Log, TEXT("Login response received. Success: %s | MMOClient instance: %p"), bSuccess ? TEXT("true") : TEXT("false"), this);
                 // Store sessionKey in GameInstance
-                if (GWorld) {
-                    UGameInstance* GameInstance = GWorld->GetGameInstance();
+                if (UWorld* World = GetWorld()) {
+                    UGameInstance* GameInstance = World->GetGameInstance();
                     if (GameInstance) {
                         FString SessionKeyStr = UTF8_TO_TCHAR(resp.sessionKey);
                         class UMMOGameInstance* MMOGameInstance = Cast<UMMOGameInstance>(GameInstance);
@@ -298,13 +333,61 @@ void UMMOClient::HandleAuthPacket(const TArray<uint8>& Data)
             }
             break;
         }
+        case PACKET_S_CHAR_CREATE_RESULT: {
+            S_CharCreateResult resp;
+            if (DeserializeStruct(Data, resp)) {
+                bool bSuccess = resp.resultCode == 0;
+                OnCharCreateSuccess.Broadcast(bSuccess);
+                if (bSuccess) {
+                    UE_LOG(LogMMOClient, Log, TEXT("Character created successfully. CharId: %d"), resp.charId);
+                } else {
+                    UE_LOG(LogMMOClient, Warning, TEXT("Character creation failed."));
+                }
+            }
+            break;
+        }
+        case PACKET_S_CHAR_DELETE_RESULT: {
+            S_CharDeleteResult resp;
+            if (DeserializeStruct(Data, resp)) {
+                bool bSuccess = resp.resultCode == 0;
+                OnCharDeleteSuccess.Broadcast(bSuccess);
+                if (bSuccess) {
+                    UE_LOG(LogMMOClient, Log, TEXT("Character deleted successfully. CharId: %d"), resp.charId);
+                } else {
+                    UE_LOG(LogMMOClient, Warning, TEXT("Character deletion failed."));
+                }
+            }
+            break;
+        }
         case PACKET_S_CHAR_SELECT_RESULT: {
             S_CharSelectResult resp;
-            if (DeserializeStruct(Data, resp) && resp.resultCode == 0) {
-                UE_LOG(LogMMOClient, Log, TEXT("Character select result: Success. Connecting to game server %s:%d"), UTF8_TO_TCHAR(resp.gameServerAddress), resp.gameServerPort);
-                // Connect to game server using resp.gameServerAddress and resp.gameServerPort
-                ConnectGame(UTF8_TO_TCHAR(resp.gameServerAddress), resp.gameServerPort);
-                OnCharSelectSuccess.Broadcast();
+            if (DeserializeStruct(Data, resp)) {
+                bool bSuccess = resp.resultCode == 0;
+                OnCharSelectSuccess.Broadcast(bSuccess);
+                if (bSuccess) {
+                    UE_LOG(LogMMOClient, Log, TEXT("Character select result: Success. Connecting to game server %s:%d"), UTF8_TO_TCHAR(resp.gameServerAddress), resp.gameServerPort);
+                    // Connect to game server using resp.gameServerAddress and resp.gameServerPort
+                    ConnectGame(UTF8_TO_TCHAR(resp.gameServerAddress), resp.gameServerPort);
+                } else {
+                    // Handle failure case
+                    UE_LOG(LogMMOClient, Warning, TEXT("Character selection failed."));
+                }
+            }
+            break;
+        }
+        case PACKET_S_CHAR_LIST_RESULT: {
+            S_CharListResult resp;
+            if (DeserializeStruct(Data, resp)) {
+                UE_LOG(LogMMOClient, Log, TEXT("Character list received. Count: %d"), resp.CharCount);
+                TArray<FCharListEntry> CharList;
+                for (int32 i = 0; i < resp.CharCount; ++i) {
+                    FCharListEntry Entry;
+                    Entry.CharId = resp.Entries[i].CharId;
+                    Entry.Name = UTF8_TO_TCHAR(resp.Entries[i].Name);
+                    Entry.ClassId = resp.Entries[i].ClassId;
+                    CharList.Add(Entry);
+                }
+                OnCharListResult.Broadcast(CharList, resp.CharCount);
             }
             break;
         }
@@ -395,11 +478,79 @@ void UMMOClient::Shutdown()
     AuthSocket.Reset();
     GameSocket.Reset();
     ChatSocket.Reset();
-    if (GWorld)
+    if (UWorld* World = GetWorld())
     {
-        GWorld->GetTimerManager().ClearTimer(AuthRecvHandle);
-        GWorld->GetTimerManager().ClearTimer(GameRecvHandle);
-        GWorld->GetTimerManager().ClearTimer(ChatRecvHandle);
+        World->GetTimerManager().ClearTimer(TickTimerHandle);
+        World->GetTimerManager().ClearTimer(AuthRecvHandle);
+        World->GetTimerManager().ClearTimer(GameRecvHandle);
+        World->GetTimerManager().ClearTimer(ChatRecvHandle);
     }
+    else
+    {
+        UE_LOG(LogMMOClient, Error, TEXT("GetWorld() returned nullptr, timers not cleared!"));
+    }
+
     // If you have any additional resources (threads, buffers, etc.), clean them up here
 }
+
+void UMMOClient::SetClientState(EMMOClientState NewState)
+{
+    if (CurrentState != NewState)
+    {
+        CurrentState = NewState;
+        OnClientStateChanged.Broadcast(NewState);
+        UE_LOG(LogMMOClient, Log, TEXT("MMOClient state changed to: %s"), *UEnum::GetValueAsString(NewState));
+    }
+}
+/*
+    In Unreal Engine, there is no built-in event or callback for socket disconnection on the FSocket class itself—Unreal's sockets are low-level and do not provide asynchronous disconnect notifications
+*/
+void UMMOClient::TickSockets()
+{   
+    // Check AuthSocket
+    switch (CurrentState) 
+    {
+        case EMMOClientState::CONNECTING_AUTH: // Reconnecting to Auth server
+            if (
+                (!AuthSocket.IsValid() || AuthSocket->GetConnectionState() != SCS_Connected) 
+                && !LastAuthHost.IsEmpty() && LastAuthPort > 0
+            ){
+                UE_LOG(LogMMOClient, Warning, TEXT("Reconnecting to Auth server at %s:%d"), *LastAuthHost, LastAuthPort);
+                ConnectAuth(LastAuthHost, LastAuthPort);
+            }
+            break;
+        case EMMOClientState::CONNECTING_GAME: // Reconnecting to Game server & Chat Server only try for 5 seconds
+            if(gameRetryCount < 30)
+            {
+                gameRetryCount++;
+                if (
+                    (!GameSocket.IsValid() || GameSocket->GetConnectionState() != SCS_Connected )
+                    && !LastGameHost.IsEmpty() && LastGamePort > 0
+                ){
+                    UE_LOG(LogMMOClient, Warning, TEXT("Reconnecting to Game server at %s:%d Retry: %d"), *LastGameHost, LastGamePort, gameRetryCount);
+                    ConnectGame(LastGameHost, LastGamePort);
+                }
+            }
+            else
+            {
+                gameRetryCount = 0;
+                SetClientState(EMMOClientState::CONNECTING_AUTH);
+                UE_LOG(LogMMOClient, Warning, TEXT("Game server connection failed after 30 attempts. Switching to AUTH state."));
+            }
+            break;
+            
+        default:
+            break;
+    }
+
+}
+
+void UMMOClient::BeginDestroy()
+{
+    if (UWorld* World = GetWorld())
+    {
+        World->GetTimerManager().ClearTimer(TickTimerHandle);
+    }
+    Super::BeginDestroy();
+}
+

@@ -4,6 +4,7 @@
 #include "../../common/include/Packets.h"
 #include "../../common/include/SocketServer.h"
 #include "../../common/include/BaseServer.h"
+#include "../../common/include/Log.h"
 #include <iostream>
 #include <csignal>
 #include <atomic>
@@ -29,12 +30,12 @@ public:
                 C_ChatMessage req;
                 if (data.size() < sizeof(C_ChatMessage)) return;
                 std::memcpy(&req, data.data(), sizeof(C_ChatMessage));
-                std::cout << "Received C_ChatMessage from socket " << clientSock << std::endl;
+                LOG_DEBUG(std::string("Received C_ChatMessage from socket ") + std::to_string(clientSock));
                 // TODO: Handle chat message logic
                 break;
             }
             default:
-                std::cout << "Unknown or unhandled packet: " << header.packetId << " from socket " << clientSock << std::endl;
+                LOG_DEBUG(std::string("Unknown or unhandled packet: ") + std::to_string(header.packetId) + " from socket " + std::to_string(clientSock));
                 break;
         }
     }

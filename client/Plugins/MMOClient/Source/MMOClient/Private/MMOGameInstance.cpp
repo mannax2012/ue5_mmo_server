@@ -8,7 +8,7 @@ void UMMOGameInstance::Init()
     MMOClient = NewObject<UMMOClient>(this, UMMOClient::StaticClass());
     if (MMOClient)
     {
-         MMOClient->AddToRoot(); // Prevent GC (optional, for debugging)
+        MMOClient->AddToRoot(); // Prevent GC (optional, for debugging)
         // Use Blueprint-configurable IP/port
         MMOClient->ConnectAuth(AuthServerIP, AuthServerPort);
     }
@@ -40,5 +40,58 @@ void UMMOGameInstance::Login(const FString& Username, const FString& Password)
         TArray<uint8> Data;
         SerializeStruct(LoginPacket, Data);
         MMOClient->SendToAuth(Data);
+    }
+}
+
+void UMMOGameInstance::CreateCharacter(const FString& Name, int32 ClassId)
+{
+    if (MMOClient)
+    {
+        // Construct and send C_CharCreate packet
+        C_CharCreate Packet;
+        FMemory::Memzero(&Packet, sizeof(Packet));
+        Packet.header.packetId = PACKET_C_CHAR_CREATE;
+        Packet.nameLength = FMath::Min(Name.Len(), 31);
+        FCStringAnsi::Strncpy(Packet.name, TCHAR_TO_ANSI(*Name), Packet.nameLength);
+        Packet.classId = ClassId;
+        MMOClient->SendToAuth(TArray<uint8>((uint8*)&Packet, sizeof(Packet)));
+    }
+}
+
+void UMMOGameInstance::DeleteCharacter(int32 CharId)
+{
+    if (MMOClient)
+    {
+        // Construct and send C_CharDelete packet
+        C_CharDelete Packet;
+        FMemory::Memzero(&Packet, sizeof(Packet));
+        Packet.header.packetId = PACKET_C_CHAR_DELETE;
+        Packet.charId = CharId;
+        MMOClient->SendToAuth(TArray<uint8>((uint8*)&Packet, sizeof(Packet)));
+    }
+}
+
+void UMMOGameInstance::ListCharacters()
+{
+    if (MMOClient)
+    {
+        // Construct and send C_CharListRequest packet
+        C_CharListRequest Packet;
+        FMemory::Memzero(&Packet, sizeof(Packet));
+        Packet.header.packetId = PACKET_C_CHAR_LIST_REQUEST;
+        MMOClient->SendToAuth(TArray<uint8>((uint8*)&Packet, sizeof(Packet)));
+    }
+}
+
+void UMMOGameInstance::SelectCharacter(int32 CharId)
+{
+    if (MMOClient)
+    {
+        // Construct and send C_CharSelect packet
+        C_CharSelect Packet;
+        FMemory::Memzero(&Packet, sizeof(Packet));
+        Packet.header.packetId = PACKET_C_CHAR_SELECT;
+        Packet.charId = CharId;
+        MMOClient->SendToAuth(TArray<uint8>((uint8*)&Packet, sizeof(Packet)));
     }
 }

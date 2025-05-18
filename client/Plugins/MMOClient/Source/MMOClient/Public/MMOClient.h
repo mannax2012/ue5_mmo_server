@@ -4,11 +4,33 @@
 #include "UObject/NoExportTypes.h"
 #include "MMOClient.generated.h"
 
+// Character list entry for Blueprint
+USTRUCT(BlueprintType)
+struct FCharListEntry {
+    GENERATED_BODY()
+    UPROPERTY(BlueprintReadOnly)
+    int32 CharId;
+    UPROPERTY(BlueprintReadOnly)
+    FString Name;
+    UPROPERTY(BlueprintReadOnly)
+    int32 ClassId; // Changed from int16 to int32 for Blueprint compatibility
+};
+
+UENUM(BlueprintType)
+enum class EMMOClientState : uint8 {
+    DISCONNECTED     UMETA(DisplayName = "Disconnected"),
+    CONNECTING_AUTH       UMETA(DisplayName = "Auth Connecting"),
+    AUTH             UMETA(DisplayName = "Auth Connected"),
+    CONNECTING_GAME       UMETA(DisplayName = "Game Connecting"),
+    GAME             UMETA(DisplayName = "Game Connected")
+};
+
 UCLASS(Blueprintable)
 class MMOCLIENT_API UMMOClient : public UObject
 {
     GENERATED_BODY()
 public:
+
     UFUNCTION(BlueprintCallable, Category = "MMOClient")
     void ConnectAuth(const FString& Host, int32 Port);
 
@@ -37,14 +59,71 @@ public:
     UPROPERTY(BlueprintAssignable, Category = "MMOClient")
     FOnLoginResult OnLoginResult;
 
-    DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnCharSelectSuccess);
+    DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnCharSelectSuccess, bool, bSuccess);
     UPROPERTY(BlueprintAssignable, Category = "MMOClient")
     FOnCharSelectSuccess OnCharSelectSuccess;
+
+    DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnCharCreateSuccess, bool, bSuccess);
+    UPROPERTY(BlueprintAssignable, Category = "MMOClient")
+    FOnCharCreateSuccess OnCharCreateSuccess;
+
+    DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnCharDeleteSuccess, bool, bSuccess);
+    UPROPERTY(BlueprintAssignable, Category = "MMOClient")
+    FOnCharDeleteSuccess OnCharDeleteSuccess;
+
+    DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnCharListResult, const TArray<FCharListEntry>&, CharList, int32, CharCount);
+    UPROPERTY(BlueprintAssignable, Category = "MMOClient")
+    FOnCharListResult OnCharListResult;
+
+    // Connection delegates
+    DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnAuthConnected);
+    UPROPERTY(BlueprintAssignable, Category = "MMOClient|Connection")
+    FOnAuthConnected OnAuthConnected;
+
+    DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnGameConnected);
+    UPROPERTY(BlueprintAssignable, Category = "MMOClient|Connection")
+    FOnGameConnected OnGameConnected;
+
+    DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnChatConnected);
+    UPROPERTY(BlueprintAssignable, Category = "MMOClient|Connection")
+    FOnChatConnected OnChatConnected;
+
+    // Disconnect delegates
+    DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnAuthDisconnected);
+    UPROPERTY(BlueprintAssignable, Category = "MMOClient|Connection")
+    FOnAuthDisconnected OnAuthDisconnected;
+
+    DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnGameDisconnected);
+    UPROPERTY(BlueprintAssignable, Category = "MMOClient|Connection")
+    FOnGameDisconnected OnGameDisconnected;
+
+    DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnChatDisconnected);
+    UPROPERTY(BlueprintAssignable, Category = "MMOClient|Connection")
+    FOnChatDisconnected OnChatDisconnected;
+
+    // State enum and property
+    UPROPERTY(BlueprintReadOnly, Category = "MMOClient|State")
+    EMMOClientState CurrentState = EMMOClientState::DISCONNECTED;
+
+    // Track last state for reconnection logic
+    UPROPERTY(BlueprintReadOnly, Category = "MMOClient|State")
+    EMMOClientState LastState = EMMOClientState::DISCONNECTED;
+
+    // Delegate for state change
+    DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnClientStateChanged, EMMOClientState, NewState);
+    UPROPERTY(BlueprintAssignable, Category = "MMOClient|State")
+    FOnClientStateChanged OnClientStateChanged;
+
+    // Call this to set state and broadcast if changed
+    UFUNCTION(BlueprintCallable, Category = "MMOClient|State")
+    void SetClientState(EMMOClientState NewState);
+    virtual void BeginDestroy() override;
 
 private:
     TSharedPtr<class FSocket> AuthSocket;
     TSharedPtr<class FSocket> GameSocket;
     TSharedPtr<class FSocket> ChatSocket;
+    int32 gameRetryCount = 0;
 
     FTimerHandle AuthRecvHandle, GameRecvHandle, ChatRecvHandle;
     void OnReceive(TSharedPtr<FSocket> Socket, FString ServerType);
@@ -55,4 +134,14 @@ private:
 
     bool EncryptAndCompress(const TArray<uint8>& In, TArray<uint8>& Out);
     bool DecryptAndDecompress(const TArray<uint8>& In, TArray<uint8>& Out);
+
+    
+    void TickSockets();
+    // Store last used host/port for Auth and Game
+    FString LastAuthHost;
+    int32 LastAuthPort = 0;
+    FString LastGameHost;
+    int32 LastGamePort = 0;
+
+    FTimerHandle TickTimerHandle;
 };

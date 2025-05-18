@@ -66,3 +66,15 @@ bool RedisClient::expire(const std::string& key, int seconds) {
     if (reply) freeReplyObject(reply);
     return ok;
 }
+
+bool RedisClient::hset(const std::string& key, const std::vector<std::pair<std::string, std::string>>& fields) {
+    if (!ctx) return false;
+    std::string cmd = "HSET " + key;
+    for (const auto& kv : fields) {
+        cmd += " " + kv.first + " '" + kv.second + "'";
+    }
+    redisReply* reply = (redisReply*)redisCommand(ctx, cmd.c_str());
+    bool ok = reply && (reply->type == REDIS_REPLY_INTEGER || reply->type == REDIS_REPLY_STATUS);
+    if (reply) freeReplyObject(reply);
+    return ok;
+}

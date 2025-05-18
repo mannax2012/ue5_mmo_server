@@ -1,6 +1,8 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <utility> // for std::pair
+
 struct redisContext;
 
 class RedisClient {
@@ -13,6 +15,7 @@ public:
     bool del(const std::string& key);
     bool exists(const std::string& key);
     bool expire(const std::string& key, int seconds);
+    bool hset(const std::string& key, const std::vector<std::pair<std::string, std::string>>& fields);
 private:
     redisContext* ctx;
 };

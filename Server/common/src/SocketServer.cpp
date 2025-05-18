@@ -9,6 +9,7 @@
 #include <boost/asio.hpp>
 #include <iostream>
 #include <map>
+#include "../include/Log.h"
 
 // High-performance TCP server (cross-platform, non-blocking, multithreaded, failsafe, using Boost.Asio)
 class SocketServerImpl : public SocketServer {
@@ -27,16 +28,16 @@ public:
             threads.emplace_back([this]() { ioContext.run(); });
             return true;
         } catch (const std::exception& e) {
-            std::cerr << "SocketServer start error: " << e.what() << std::endl;
+            LOG_ERROR("SocketServer start error: " + std::string(e.what()));
             return false;
         }
     }
     void stop() override {
         running = false;
         ioContext.stop();
-        std::cout << "[DEBUG] Stopping SocketServerImpl, joining threads..." << std::endl;
+        LOG_DEBUG("Stopping SocketServerImpl..., joining threads...");
         for (auto& t : threads) if (t.joinable()) t.join();
-        std::cout << "[DEBUG] All SocketServerImpl threads joined." << std::endl;
+        LOG_DEBUG(" ALL SocketServerImpl threads joined.");
         threads.clear();
     }
     void send(const std::vector<uint8_t>& data, intptr_t clientSock) override {

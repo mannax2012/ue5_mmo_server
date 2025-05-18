@@ -2,6 +2,7 @@
 #include <fstream>
 #include <sstream>
 #include <iostream>
+#include "../include/Log.h"
 
 // Helper to trim whitespace from both ends of a string
 static inline std::string trim(const std::string& s) {
@@ -24,9 +25,9 @@ bool Config::load(const std::string& filename) {
         values[key] = value;
     }
     // Print all loaded configs
-    std::cout << "[CONFIG] Loaded values from '" << filename << "':" << std::endl;
+    LOG("[CONFIG] Loaded config file: " + filename);
     for (const auto& kv : values) {
-        std::cout << "  " << kv.first << " = " << kv.second << std::endl;
+        LOG("[CONFIG][" + kv.first + "] = " + kv.second);
     }
     return true;
 }

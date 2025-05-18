@@ -4,6 +4,7 @@
 #include "../../common/include/Packets.h"
 #include "../../common/include/SocketServer.h"
 #include "../../common/include/BaseServer.h"
+#include "../../common/include/Log.h"
 #include <iostream>
 #include <unordered_map>
 #include <csignal>
@@ -25,7 +26,7 @@ class GameServer : public BaseServer {
                 C_Move req;
                 if (data.size() < sizeof(C_Move)) return;
                 std::memcpy(&req, data.data(), sizeof(C_Move));
-                std::cout << "Received C_Move from socket " << clientSock << std::endl;
+                LOG_DEBUG(std::string("Received C_Move from socket ") + std::to_string(clientSock));
                 // TODO: Handle movement logic
                 break;
             }
@@ -33,7 +34,7 @@ class GameServer : public BaseServer {
                 C_CombatAction req;
                 if (data.size() < sizeof(C_CombatAction)) return;
                 std::memcpy(&req, data.data(), sizeof(C_CombatAction));
-                std::cout << "Received C_CombatAction from socket " << clientSock << std::endl;
+                LOG_DEBUG(std::string("Received C_CombatAction from socket ") + std::to_string(clientSock));
                 // TODO: Handle combat logic
                 break;
             }
@@ -41,12 +42,12 @@ class GameServer : public BaseServer {
                 C_ShopBuy req;
                 if (data.size() < sizeof(C_ShopBuy)) return;
                 std::memcpy(&req, data.data(), sizeof(C_ShopBuy));
-                std::cout << "Received C_ShopBuy from socket " << clientSock << std::endl;
+                LOG_DEBUG(std::string("Received C_ShopBuy from socket ") + std::to_string(clientSock));
                 // TODO: Handle shop buy logic
                 break;
             }
             default:
-                std::cout << "Unknown or unhandled packet: " << header.packetId << " from socket " << clientSock << std::endl;
+                LOG_DEBUG(std::string("Unknown or unhandled packet: ") + std::to_string(header.packetId) + " from socket " + std::to_string(clientSock));
                 break;
         }
     }
