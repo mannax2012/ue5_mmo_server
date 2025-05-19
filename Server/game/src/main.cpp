@@ -5,6 +5,9 @@
 #include "../../common/include/SocketServer.h"
 #include "../../common/include/BaseServer.h"
 #include "../../common/include/Log.h"
+#include "MobManager.h"
+#include "ZoneManager.h"
+#include "Player.h"
 #include <iostream>
 #include <thread>
 #include <chrono>
@@ -17,11 +20,21 @@
 
 class GameServer : public BaseServer {
   public:
-    GameServer() : BaseServer("game") {}
+    GameServer() : BaseServer("game") {}    
+    MobManager mobManager;
+    ZoneManager zoneManager;
+ 
 
     void handlePacket(const PacketHeader& header, const std::vector<uint8_t>& data, intptr_t clientSock) override {
         // Use BaseServer's sessionMap for session tracking
         auto& session = sessionMap[clientSock];
+
+        //CHECK FOR LOGIN
+        if(session.playerId == -1 && header.packetId != PACKET_C_CONNECT_REQUEST) {
+            LOG_DEBUG("Session not logged in, dropping packet.");
+            return;
+        }
+
         switch (header.packetId) {
             case PACKET_C_CONNECT_REQUEST: {
                 C_ConnectRequest req;
@@ -66,6 +79,14 @@ class GameServer : public BaseServer {
                 resp.header.packetId = PACKET_S_CONNECT_RESULT;
                 resp.resultCode = 0; // success
                 sendToClient(&resp, sizeof(resp), clientSock);
+
+                // After successful connect, create Player entity and add to ZoneManager
+                if (resp.resultCode == 0) {
+                    auto player = std::make_shared<Player>();
+                    player->InitFromDB(mysql, session.charId, session.username, session.playerId);
+                    zoneManager.AddEntityToZone(player->zoneId, player);
+                    session.playerEntity = player;
+                }
                 break;
             }
             case PACKET_C_MOVE: {
@@ -73,7 +94,10 @@ class GameServer : public BaseServer {
                 if (data.size() < sizeof(C_Move)) return;
                 std::memcpy(&req, data.data(), sizeof(C_Move));
                 LOG_DEBUG(std::string("Received C_Move from socket ") + std::to_string(clientSock));
-                // TODO: Handle movement logic
+                auto player = session.playerEntity;
+                if (player) {
+                    player->MoveTo(req.x, req.y, req.z, &zoneManager);
+                }
                 break;
             }
             case PACKET_C_COMBAT_ACTION: {
@@ -97,6 +121,14 @@ class GameServer : public BaseServer {
                 break;
         }
     }
+
+    int run(int argc, char** argv) {
+        int result = BaseServer::run(argc, argv);
+        //Initialize Zone Size  
+        zoneManager.SetZoneSize(config.getInt("zone_size", 100));
+        return result;
+    }
+
 };
 
 int main(int argc, char** argv) {

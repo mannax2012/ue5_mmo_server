@@ -9,6 +9,7 @@
 #include <boost/asio.hpp>
 #include <iostream>
 #include <map>
+#include <unordered_map>
 #include "../include/Log.h"
 
 // High-performance TCP server (cross-platform, non-blocking, multithreaded, failsafe, using Boost.Asio)
@@ -43,7 +44,20 @@ public:
     void send(const std::vector<uint8_t>& data, intptr_t clientSock) override {
         auto it = clients.find(clientSock);
         if (it != clients.end()) {
-            boost::asio::async_write(*it->second, boost::asio::buffer(data),
+            // Prepend 4-byte length prefix (network byte order)
+            uint32_t len = htonl(static_cast<uint32_t>(data.size()));
+            std::vector<uint8_t> out;
+            out.resize(4 + data.size());
+            std::memcpy(out.data(), &len, 4);
+            std::memcpy(out.data() + 4, data.data(), data.size());
+            // Log the actual outgoing packet (including TCP length prefix)
+            {
+                std::ostringstream oss;
+                oss << "[ACTUAL OUT] fd=" << clientSock << ", size=" << out.size() << ": ";
+                for (size_t i = 0; i < out.size(); ++i) oss << std::hex << (int)out[i] << " ";
+                LOG_DEBUG(oss.str());
+            }
+            boost::asio::async_write(*it->second, boost::asio::buffer(out),
                 [](const boost::system::error_code&, std::size_t){});
         }
     }
@@ -82,12 +96,29 @@ private:
         auto buf = std::make_shared<std::vector<uint8_t>>(2048);
         socket->async_read_some(boost::asio::buffer(*buf),
             [this, socket, buf, sockId](const boost::system::error_code& ec, std::size_t n) {
-                if (!ec && n > 0 && handler) {
-                    buf->resize(n);
-                    handler(*buf, sockId);
+                if (!ec && n > 0) {
+                    // Accumulate data in per-client buffer
+                    auto& buffer = recvBuffers[sockId];
+                    buffer.insert(buffer.end(), buf->begin(), buf->begin() + n);
+                    // Process all complete packets in the buffer
+                    size_t offset = 0;
+                    while (buffer.size() - offset >= 4) {
+                        uint32_t packetLen = 0;
+                        std::memcpy(&packetLen, buffer.data() + offset, 4);
+                        packetLen = ntohl(packetLen);
+                        if (buffer.size() - offset < 4 + packetLen)
+                            break; // Not enough data for a full packet
+                        // Extract only the payload (without length prefix)
+                        std::vector<uint8_t> payload(buffer.begin() + offset + 4, buffer.begin() + offset + 4 + packetLen);
+                        if (handler) handler(payload, sockId);
+                        offset += 4 + packetLen;
+                    }
+                    // Remove processed bytes
+                    if (offset > 0) buffer.erase(buffer.begin(), buffer.begin() + offset);
                     doRead(socket, sockId);
                 } else {
                     clients.erase(sockId);
+                    recvBuffers.erase(sockId);
                     if (onDisconnect) onDisconnect(sockId);
                 }
             });
@@ -97,6 +128,7 @@ private:
     std::atomic<bool> running;
     std::vector<std::thread> threads;
     std::map<intptr_t, std::shared_ptr<boost::asio::ip::tcp::socket>> clients;
+    std::unordered_map<intptr_t, std::vector<uint8_t>> recvBuffers; // Per-client receive buffer
     SocketPacketHandler handler;
     SocketConnectionHandler onConnect;
     SocketConnectionHandler onDisconnect;

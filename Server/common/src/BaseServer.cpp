@@ -78,6 +78,7 @@ int BaseServer::run(int argc, char** argv) {
         }
         // Decrypt and decompress before passing to handler
         std::vector<uint8_t> decompressed;
+        // Expect 4-byte uncompressed size prefix (client must send it!)
         if (!Compression::decompress(d, decompressed)) {
             LOG_ERROR(std::string("Failed to decompress packet from fd=") + std::to_string(clientSock) + ". Dropping packet.");
             return;
@@ -313,7 +314,7 @@ void BaseServer::RegisterServerInRedis(RedisClient& redis, const std::string& ke
 }
 
 void BaseServer::sendToClient(const void* packet, size_t size, intptr_t clientSock) {
-    std::vector<uint8_t> out = SerializePacketRaw(packet, size);
+    // Log raw outgoing bytes (before encryption/compression)
     {
         std::ostringstream oss;
         int16_t packetId = -1;
@@ -322,7 +323,22 @@ void BaseServer::sendToClient(const void* packet, size_t size, intptr_t clientSo
             packetId = reinterpret_cast<const PacketHeader*>(packet)->packetId;
             packetName = PacketTypeToString(packetId);
         }
-        oss << "Sending packet to fd=" << clientSock << ", size=" << out.size() << ", packetId=" << packetId << " (" << packetName << "): ";
+        oss << "[RAW OUT] fd=" << clientSock << ", size=" << size << ", packetId=" << packetId << " (" << packetName << "): ";
+        const uint8_t* ptr = reinterpret_cast<const uint8_t*>(packet);
+        for (size_t i = 0; i < size; ++i) oss << std::hex << (int)ptr[i] << " ";
+        LOG_DEBUG(oss.str());
+    }
+    std::vector<uint8_t> out = SerializePacketRaw(packet, size);
+    // Log encrypted/compressed outgoing bytes
+    {
+        std::ostringstream oss;
+        int16_t packetId = -1;
+        const char* packetName = "UNKNOWN_PACKET";
+        if (size >= sizeof(PacketHeader)) {
+            packetId = reinterpret_cast<const PacketHeader*>(packet)->packetId;
+            packetName = PacketTypeToString(packetId);
+        }
+        oss << "[ENC+COMP OUT] fd=" << clientSock << ", size=" << out.size() << ", packetId=" << packetId << " (" << packetName << "): ";
         for (auto b : out) oss << std::hex << (int)b << " ";
         LOG_DEBUG(oss.str());
     }

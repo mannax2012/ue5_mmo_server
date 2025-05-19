@@ -66,7 +66,6 @@ namespace Compression {
         int compressedSize = LZ4_compress_default((const char*)in.data(), (char*)compressed.data(), (int)in.size(), maxDstSize);
         if (compressedSize <= 0) return false;
         out.resize(4 + compressedSize);
-        // Store original size in network byte order
         uint32_t origSize = htonl((uint32_t)in.size());
         std::memcpy(out.data(), &origSize, 4);
         std::memcpy(out.data() + 4, compressed.data(), compressedSize);

@@ -116,14 +116,11 @@ static bool CompressLZ4(const TArray<uint8>& In, TArray<uint8>& Out)
     return true;
 }
 
-static bool DecompressLZ4(const TArray<uint8>& In, TArray<uint8>& Out, int32 /*UncompressedSize*/)
+static bool DecompressLZ4(const TArray<uint8>& In, TArray<uint8>& Out, int32 UncompressedSize)
 {
-    if (In.Num() < 4) return false;
-    uint32 OrigSize = 0;
-    FMemory::Memcpy(&OrigSize, In.GetData(), 4);
-    OrigSize = ntohl(OrigSize);
-    Out.SetNumUninitialized(OrigSize);
-    if (!FCompression::UncompressMemory(NAME_LZ4, Out.GetData(), OrigSize, In.GetData() + 4, In.Num() - 4))
+    if (UncompressedSize <= 0) return false;
+    Out.SetNumUninitialized(UncompressedSize);
+    if (!FCompression::UncompressMemory(NAME_LZ4, Out.GetData(), UncompressedSize, In.GetData(), In.Num()))
         return false;
     return true;
 }
@@ -252,25 +249,60 @@ void UMMOClient::ConnectChat(const FString& Host, int32 Port)
 void UMMOClient::SendToAuth(const TArray<uint8>& Data)
 {
     UE_LOG(LogMMOClient, Verbose, TEXT("Sending data to Auth server. Size: %d bytes"), Data.Num());
+    FString HexDump;
+    for (int32 i = 0; i < Data.Num(); ++i) HexDump += FString::Printf(TEXT("%02x "), Data[i]);
+    UE_LOG(LogMMOClient, Verbose, TEXT("[RAW OUT] Data: %s"), *HexDump);
     TArray<uint8> Out;
     if (EncryptAndCompress(Data, Out) && AuthSocket.IsValid()) {
-        int32 Sent = 0; AuthSocket->Send(Out.GetData(), Out.Num(), Sent);
+        // Prepend 4-byte length prefix (network byte order)
+        uint32 PacketLen = Out.Num();
+        uint32 NetPacketLen = htonl(PacketLen);
+        TArray<uint8> SendBuf;
+        SendBuf.SetNumUninitialized(4 + PacketLen);
+        FMemory::Memcpy(SendBuf.GetData(), &NetPacketLen, 4);
+        FMemory::Memcpy(SendBuf.GetData() + 4, Out.GetData(), PacketLen);
+        FString HexDump2;
+        for (int32 i = 0; i < SendBuf.Num(); ++i) HexDump2 += FString::Printf(TEXT("%02x "), SendBuf[i]);
+        UE_LOG(LogMMOClient, Verbose, TEXT("[ENC+COMP+LEN OUT] Data: %s"), *HexDump2);
+        int32 Sent = 0; AuthSocket->Send(SendBuf.GetData(), SendBuf.Num(), Sent);
     }
 }
+
 void UMMOClient::SendToGame(const TArray<uint8>& Data)
 {
-    UE_LOG(LogMMOClient, Verbose, TEXT("Sending data to Game server. Size: %d bytes"), Data.Num());
+    UE_LOG(LogMMOClient, Verbose, TEXT("[RAW OUT] Sending data to Game server. Size: %d bytes"), Data.Num());
+    FString HexDump;
+    for (int32 i = 0; i < Data.Num(); ++i) HexDump += FString::Printf(TEXT("%02x "), Data[i]);
+    UE_LOG(LogMMOClient, Verbose, TEXT("[RAW OUT] Data: %s"), *HexDump);
     TArray<uint8> Out;
     if (EncryptAndCompress(Data, Out) && GameSocket.IsValid()) {
-        int32 Sent = 0; GameSocket->Send(Out.GetData(), Out.Num(), Sent);
+        // Prepend 4-byte length prefix (network byte order)
+        uint32 PacketLen = Out.Num();
+        uint32 NetPacketLen = htonl(PacketLen);
+        TArray<uint8> SendBuf;
+        SendBuf.SetNumUninitialized(4 + PacketLen);
+        FMemory::Memcpy(SendBuf.GetData(), &NetPacketLen, 4);
+        FMemory::Memcpy(SendBuf.GetData() + 4, Out.GetData(), PacketLen);
+        FString HexDump2;
+        for (int32 i = 0; i < SendBuf.Num(); ++i) HexDump2 += FString::Printf(TEXT("%02x "), SendBuf[i]);
+        UE_LOG(LogMMOClient, Verbose, TEXT("[ENC+COMP+LEN OUT] Data: %s"), *HexDump2);
+        int32 Sent = 0; GameSocket->Send(SendBuf.GetData(), SendBuf.Num(), Sent);
     }
 }
+
 void UMMOClient::SendToChat(const TArray<uint8>& Data)
 {
     UE_LOG(LogMMOClient, Verbose, TEXT("Sending data to Chat server. Size: %d bytes"), Data.Num());
     TArray<uint8> Out;
     if (EncryptAndCompress(Data, Out) && ChatSocket.IsValid()) {
-        int32 Sent = 0; ChatSocket->Send(Out.GetData(), Out.Num(), Sent);
+        // Prepend 4-byte length prefix (network byte order)
+        uint32 PacketLen = Out.Num();
+        uint32 NetPacketLen = htonl(PacketLen);
+        TArray<uint8> SendBuf;
+        SendBuf.SetNumUninitialized(4 + PacketLen);
+        FMemory::Memcpy(SendBuf.GetData(), &NetPacketLen, 4);
+        FMemory::Memcpy(SendBuf.GetData() + 4, Out.GetData(), PacketLen);
+        int32 Sent = 0; ChatSocket->Send(SendBuf.GetData(), SendBuf.Num(), Sent);
     }
 }
 
@@ -324,31 +356,83 @@ void UMMOClient::DisconnectChat()
 
 void UMMOClient::OnReceive(TSharedPtr<FSocket> Socket, FString ServerType)
 {
-     UE_LOG(LogMMOClient, Verbose, TEXT("OnReceive called for %s"), *ServerType);
+    static TMap<FString, TArray<uint8>> ReceiveBuffers; // One buffer per server type
+    //UE_LOG(LogMMOClient, Verbose, TEXT("OnReceive called for %s"), *ServerType);
     if (!Socket.IsValid()) return;
-     UE_LOG(LogMMOClient, Verbose, TEXT("OnReceive Socket VALID"));
+    //UE_LOG(LogMMOClient, Verbose, TEXT("OnReceive Socket VALID"));
     uint32 PendingDataSize = 0;
+    TArray<uint8>& Buffer = ReceiveBuffers.FindOrAdd(ServerType);
     while (Socket->HasPendingData(PendingDataSize))
     {
         TArray<uint8> Data; Data.SetNumUninitialized(PendingDataSize);
         int32 BytesRead = 0;
         Socket->Recv(Data.GetData(), Data.Num(), BytesRead);
-        UE_LOG(LogMMOClient, Verbose, TEXT("Received %d bytes from %s server."), BytesRead, *ServerType);
+        UE_LOG(LogMMOClient, Verbose, TEXT("[RAW IN] Received %d bytes from %s server."), BytesRead, *ServerType);
+        FString HexDump;
+        for (int32 i = 0; i < Data.Num(); ++i) HexDump += FString::Printf(TEXT("%02x "), Data[i]);
+        UE_LOG(LogMMOClient, Verbose, TEXT("[RAW IN] Data: %s"), *HexDump);
         if (BytesRead > 0)
         {
-            TArray<uint8> Plain;
-            if (DecryptAndDecompress(Data, Plain))
-            {
-                UE_LOG(LogMMOClient, Verbose, TEXT("Decrypted and decompressed packet from %s server. Size: %d bytes"), *ServerType, Plain.Num());
-                if (ServerType == TEXT("Auth")) HandleAuthPacket(Plain);
-                else if (ServerType == TEXT("Game")) HandleGamePacket(Plain);
-                else if (ServerType == TEXT("Chat")) HandleChatPacket(Plain);
-            }
-            else {
-                UE_LOG(LogMMOClient, Warning, TEXT("Failed to decrypt/decompress packet from %s server."), *ServerType);
-            }
+            int32 OldNum = Buffer.Num();
+            Buffer.SetNum(OldNum + BytesRead);
+            FMemory::Memcpy(Buffer.GetData() + OldNum, Data.GetData(), BytesRead);
         }
     }
+    // Process all complete packets in the buffer
+    int32 Offset = 0;
+    while (Buffer.Num() - Offset >= 4) {
+        uint32 PacketLen = 0;
+        FMemory::Memcpy(&PacketLen, Buffer.GetData() + Offset, 4);
+        PacketLen = ntohl(PacketLen);
+        if (Buffer.Num() - Offset < 4 + (int32)PacketLen)
+            break; // Not enough data for a full packet
+        // Extract one packet (including length prefix)
+        TArray<uint8> OnePacket;
+        OnePacket.SetNumUninitialized(4 + PacketLen);
+        FMemory::Memcpy(OnePacket.GetData(), Buffer.GetData() + Offset, 4 + PacketLen);
+        // Remove length prefix for processing
+        TArray<uint8> Payload;
+        Payload.SetNumUninitialized(PacketLen);
+        FMemory::Memcpy(Payload.GetData(), OnePacket.GetData() + 4, PacketLen);
+        // Extract 4-byte uncompressed size prefix
+        if (Payload.Num() < 4) {
+            UE_LOG(LogMMOClient, Error, TEXT("[DECOMPRESS FAIL] Packet too short for LZ4 size prefix from %s server."), *ServerType);
+            Offset += 4 + PacketLen;
+            continue;
+        }
+        uint32 UncompressedSize = 0;
+        FMemory::Memcpy(&UncompressedSize, Payload.GetData(), 4);
+        UncompressedSize = ntohl(UncompressedSize);
+        TArray<uint8> CompressedData;
+        CompressedData.SetNumUninitialized(Payload.Num() - 4);
+        FMemory::Memcpy(CompressedData.GetData(), Payload.GetData() + 4, Payload.Num() - 4);
+        TArray<uint8> Decompressed;
+        if (!DecompressLZ4(CompressedData, Decompressed, UncompressedSize)) {
+            UE_LOG(LogMMOClient, Error, TEXT("[DECOMPRESS FAIL] from %s server."), *ServerType);
+            Offset += 4 + PacketLen;
+            continue;
+        }
+        FString HexDumpDecomp;
+        for (int32 i = 0; i < Decompressed.Num(); ++i) HexDumpDecomp += FString::Printf(TEXT("%02x "), Decompressed[i]);
+        UE_LOG(LogMMOClient, Verbose, TEXT("[DECOMP OUT] Data: %s"), *HexDumpDecomp);
+        TArray<uint8> Plain;
+        if (!AesDecrypt(Decompressed, Plain, PACKET_CRYPTO_KEY)) {
+            UE_LOG(LogMMOClient, Error, TEXT("[DECRYPT FAIL] from %s server."), *ServerType);
+            Offset += 4 + PacketLen; // Skip this packet
+            continue;
+        }
+        FString HexDumpPlain;
+        for (int32 i = 0; i < Plain.Num(); ++i) HexDumpPlain += FString::Printf(TEXT("%02x "), Plain[i]);
+        UE_LOG(LogMMOClient, Verbose, TEXT("[DECRYPT OUT] Data: %s"), *HexDumpPlain);
+        UE_LOG(LogMMOClient, Verbose, TEXT("Decrypted and decompressed packet from %s server. Size: %d bytes"), *ServerType, Plain.Num());
+        if (ServerType == TEXT("Auth")) HandleAuthPacket(Plain);
+        else if (ServerType == TEXT("Game")) HandleGamePacket(Plain);
+        else if (ServerType == TEXT("Chat")) HandleChatPacket(Plain);
+        Offset += 4 + PacketLen;
+    }
+    // Remove processed bytes
+    if (Offset > 0)
+        Buffer.RemoveAt(0, Offset, EAllowShrinking::No);
 }
 
 void UMMOClient::SetSessionKey(const FString& InKey)

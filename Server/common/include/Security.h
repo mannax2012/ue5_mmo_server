@@ -11,5 +11,6 @@ namespace Crypto {
 // Compression/Decompression using LZO (stub)
 namespace Compression {
     bool compress(const std::vector<uint8_t>& in, std::vector<uint8_t>& out);
+    // decompress expects a 4-byte uncompressed size prefix in the input buffer
     bool decompress(const std::vector<uint8_t>& in, std::vector<uint8_t>& out);
 }

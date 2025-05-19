@@ -13,6 +13,9 @@
 #include <unordered_map>
 #include <random>
 #include <chrono>
+#include <memory> // For std::shared_ptr
+
+class Player; // Forward declaration of Player
 
 struct SessionInfo {
     bool connected = true;
@@ -21,6 +24,7 @@ struct SessionInfo {
     int32_t charId = -1;
     std::string username;
     std::string sessionKey;
+    std::shared_ptr<Player> playerEntity; // Pointer to the Player entity for this session
 };
 
 class BaseServer {
