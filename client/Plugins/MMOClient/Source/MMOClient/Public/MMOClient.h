@@ -179,5 +179,13 @@ private:
 
     FTimerHandle TickTimerHandle;
     FString SessionKey;
-    
+
+    public:
+    DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnMoveResponse, FVector, ConfirmedLocation);
+    UPROPERTY(BlueprintAssignable, Category = "MMOClient|Movement")
+    FOnMoveResponse OnMoveResponse;
+
 };
+
+class UMMOPlayerMovementComponent;
+class AMMOCharacter;

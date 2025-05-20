@@ -83,9 +83,17 @@ class GameServer : public BaseServer {
                 // After successful connect, create Player entity and add to ZoneManager
                 if (resp.resultCode == 0) {
                     auto player = std::make_shared<Player>();
-                    player->InitFromDB(mysql, session.charId, session.username, session.playerId);
+                    player->InitFromDB(mysql, session.charId, session.username, session.playerId, &zoneManager);
                     zoneManager.AddEntityToZone(player->zoneId, player);
                     session.playerEntity = player;
+
+                    S_Move resp{};
+                    resp.header.packetId = PACKET_S_MOVE;
+                    resp.charId = player->id;
+                    resp.x = player->x;
+                    resp.y = player->y;
+                    resp.z = player->z;
+                    sendToClient(&resp, sizeof(resp), clientSock);
                 }
                 break;
             }
@@ -96,7 +104,14 @@ class GameServer : public BaseServer {
                 LOG_DEBUG(std::string("Received C_Move from socket ") + std::to_string(clientSock));
                 auto player = session.playerEntity;
                 if (player) {
-                    player->MoveTo(req.x, req.y, req.z, &zoneManager);
+                    player->MoveTo(req.x, req.y, req.z); 
+                   /** S_Move resp{};
+                    resp.header.packetId = PACKET_S_MOVE;
+                    resp.charId = player->id;
+                    resp.x = player->x;
+                    resp.y = player->y;
+                    resp.z = player->z;
+                    sendToClient(&resp, sizeof(resp), clientSock);              */
                 }
                 break;
             }
@@ -128,18 +143,42 @@ class GameServer : public BaseServer {
         zoneManager.SetZoneSize(config.getInt("zone_size", 100));
         return result;
     }
-
+    void onClientDisconnected(intptr_t clientSock) {
+        LOG_DEBUG("Client disconnected: " + std::to_string(clientSock));
+        auto it = sessionMap.find(clientSock);
+        if (it != sessionMap.end()) {
+            //save to mysql 
+            if (it->second.playerEntity) {
+                it->second.playerEntity->SaveToDB(mysql);
+            }
+            // Remove player entity from zone
+            if (it->second.playerEntity) {
+                zoneManager.RemoveEntityFromZone(it->second.playerEntity->zoneId, it->second.playerEntity->id);
+            }
+        }
+        BaseServer::onClientDisconnected(clientSock);
+    }
 };
 
 int main(int argc, char** argv) {
-        boost::asio::io_context io_context;
+    boost::asio::io_context io_context;
+    GameServer server; // Move this above signals.async_wait so it is in scope
     boost::asio::signal_set signals(io_context, SIGINT, SIGTERM);
     signals.async_wait([&](const boost::system::error_code& ec, int signal_num){
         LOG_INFO("Signal received, shutting down... (signal=" + std::to_string(signal_num) + ", ec=" + ec.message() + ")");
+
+        // Save all players to DB
+        for (auto& kv : server.GetSessionMap()) {
+            auto& session = kv.second;
+            if (session.playerEntity) {
+                session.playerEntity->SaveToDB(server.GetMySQL());
+            }
+        }
+
+
         BaseServer::SignalHandlerStatic(signal_num);
         io_context.stop();
     });
-    GameServer server;
     // Start server thread
     std::thread server_thread([&](){
         LOG_DEBUG("server_thread: starting server.run()");

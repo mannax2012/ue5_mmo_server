@@ -95,3 +95,20 @@ void UMMOGameInstance::SelectCharacter(int32 CharId)
         MMOClient->SendToAuth(TArray<uint8>((uint8*)&Packet, sizeof(Packet)));
     }
 }
+
+void UMMOGameInstance::SendMoveRequest(const FVector& NewLocation)
+{
+    if (MMOClient)
+    {
+        // Serialize and send move request
+
+        C_Move MovePacket;
+        memset(&MovePacket, 0, sizeof(MovePacket)); // Always zero-initialize!
+        MovePacket.header.packetId = PACKET_C_MOVE;
+        MovePacket.x = NewLocation.X;
+        MovePacket.y = NewLocation.Y;
+        MovePacket.z = NewLocation.Z;
+        // Send as a single buffer
+        MMOClient->SendToGame(TArray<uint8>((uint8*)&MovePacket, sizeof(MovePacket)));
+    }
+}

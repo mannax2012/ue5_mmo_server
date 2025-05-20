@@ -14,7 +14,13 @@ public:
     virtual void Update(float deltaTime) = 0;
 
     // Move the entity to a new position and handle zone changes
-    virtual void MoveTo(float newX, float newY, float newZ, void* zoneManagerPtr = nullptr);
+    virtual void MoveTo(float newX, float newY, float newZ);
 
     static int32_t CalculateZoneId(float x, float y);
+
+protected:
+    class ZoneManager* zoneManager = nullptr;
+public:
+    void SetZoneManager(class ZoneManager* zm) { zoneManager = zm; }
+    class ZoneManager* GetZoneManager() const { return zoneManager; }
 };

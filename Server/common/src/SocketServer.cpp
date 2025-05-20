@@ -55,7 +55,7 @@ public:
                 std::ostringstream oss;
                 oss << "[ACTUAL OUT] fd=" << clientSock << ", size=" << out.size() << ": ";
                 for (size_t i = 0; i < out.size(); ++i) oss << std::hex << (int)out[i] << " ";
-                LOG_DEBUG(oss.str());
+                LOG_DEBUG_EXT(oss.str());
             }
             boost::asio::async_write(*it->second, boost::asio::buffer(out),
                 [](const boost::system::error_code&, std::size_t){});

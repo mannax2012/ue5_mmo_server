@@ -19,6 +19,7 @@ THIRD_PARTY_INCLUDES_END
 #include "Compression/lz4.h"
 #include <Logging/LogMacros.h>
 #include "MMOClientDelegates.h"
+#include "MMOPlayerMovementComponent.h"
 
 // Define a log category for MMOClient
 DEFINE_LOG_CATEGORY_STATIC(LogMMOClient, Log, All);
@@ -544,6 +545,8 @@ void UMMOClient::HandleAuthPacket(const TArray<uint8>& Data)
     }
 }
 
+
+
 void UMMOClient::HandleGamePacket(const TArray<uint8>& Data)
 {
     if (Data.Num() < sizeof(PacketHeader)) return;
@@ -553,8 +556,8 @@ void UMMOClient::HandleGamePacket(const TArray<uint8>& Data)
         case PACKET_S_MOVE: {
             S_Move move;
             if (DeserializeStruct(Data, move)) {
-                UE_LOG(LogMMOClient, Verbose, TEXT("Move packet received."));
-                // Handle move packet
+                FVector ConfirmedLocation(move.x, move.y, move.z);
+                OnMoveResponse.Broadcast(ConfirmedLocation);
             }
             break;
         }

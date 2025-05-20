@@ -6,11 +6,12 @@
 
 // Log levels
 enum class LogLevel {
-    DEBUG = 0,
-    INFO = 1,
-    WARNING = 2,
-    ERROR = 3,
-    NONE = 4
+    DEBUG_EXTENDED = 0,
+    DEBUG = 1,
+    INFO = 2,
+    WARNING = 3,
+    ERROR = 4,
+    NONE = 5
 };
 
 extern LogLevel GLOBAL_LOG_LEVEL;
@@ -21,6 +22,7 @@ extern std::string LOG_FILE_NAME;
 
 inline LogLevel LogLevelFromString(const std::string& s) {
     if (s == "DEBUG") return LogLevel::DEBUG;
+    if(s== "DEBUG_EXTENDED") return LogLevel::DEBUG_EXTENDED;
     if (s == "INFO") return LogLevel::INFO;
     if (s == "WARNING") return LogLevel::WARNING;
     if (s == "ERROR") return LogLevel::ERROR;
@@ -50,6 +52,7 @@ inline void SetLogFileDir(const std::string& dir) {
 inline const char* LogLevelToString(LogLevel level) {
     switch (level) {
         case LogLevel::DEBUG: return "DEBUG";
+        case LogLevel::DEBUG_EXTENDED: return "DEBUG_EXTENDED";
         case LogLevel::INFO: return "INFO";
         case LogLevel::WARNING: return "WARNING";
         case LogLevel::ERROR: return "ERROR";
@@ -97,6 +100,7 @@ inline void Log(LogLevel level, const std::string& msg) {
 LogLevel LogLevelFromString(const std::string& s);
 
 #define LOG_DEBUG(msg)   Log(LogLevel::DEBUG, msg)
+#define LOG_DEBUG_EXT(msg)   Log(LogLevel::DEBUG_EXTENDED, msg)
 #define LOG_INFO(msg)    Log(LogLevel::INFO, msg)
 #define LOG_WARNING(msg) Log(LogLevel::WARNING, msg)
 #define LOG_ERROR(msg)   Log(LogLevel::ERROR, msg)

@@ -45,6 +45,10 @@ public:
     static constexpr int HEARTBEAT_INTERVAL_SEC = 5;
     static constexpr int HEARTBEAT_TIMEOUT_SEC = 12;
 
+    // Provide public accessors for shutdown logic
+    std::unordered_map<intptr_t, SessionInfo>& GetSessionMap() { return sessionMap; }
+    MySQLClient& GetMySQL() { return mysql; }
+
 protected:
     bool loadConfig(int argc, char** argv);
     bool startSocket();

@@ -74,7 +74,7 @@ int BaseServer::run(int argc, char** argv) {
             std::ostringstream oss;
             oss << "Incoming (encrypted/compressed) packet from fd=" << clientSock << ", size=" << d.size() << ": ";
             for (auto b : d) oss << std::hex << (int)b << " ";
-            LOG_DEBUG(oss.str());
+            LOG_DEBUG_EXT(oss.str());
         }
         // Decrypt and decompress before passing to handler
         std::vector<uint8_t> decompressed;
@@ -87,7 +87,7 @@ int BaseServer::run(int argc, char** argv) {
             std::ostringstream oss;
             oss << "Decompressed packet from fd=" << clientSock << ", size=" << decompressed.size() << ": ";
             for (auto b : decompressed) oss << std::hex << (int)b << " ";
-            LOG_DEBUG(oss.str());
+            LOG_DEBUG_EXT(oss.str());
         }
         std::vector<uint8_t> plain;
         if (!Crypto::decrypt(decompressed, plain, PACKET_CRYPTO_KEY)) return;
@@ -95,7 +95,7 @@ int BaseServer::run(int argc, char** argv) {
             std::ostringstream oss;
             oss << "Decrypted packet from fd=" << clientSock << ", size=" << plain.size() << ": ";
             for (auto b : plain) oss << std::hex << (int)b << " ";
-            LOG_DEBUG(oss.str());
+            LOG_DEBUG_EXT(oss.str());
         }
         
         // Defensive: check minimum size before handlePacket
@@ -326,7 +326,7 @@ void BaseServer::sendToClient(const void* packet, size_t size, intptr_t clientSo
         oss << "[RAW OUT] fd=" << clientSock << ", size=" << size << ", packetId=" << packetId << " (" << packetName << "): ";
         const uint8_t* ptr = reinterpret_cast<const uint8_t*>(packet);
         for (size_t i = 0; i < size; ++i) oss << std::hex << (int)ptr[i] << " ";
-        LOG_DEBUG(oss.str());
+        LOG_DEBUG_EXT(oss.str());
     }
     std::vector<uint8_t> out = SerializePacketRaw(packet, size);
     // Log encrypted/compressed outgoing bytes
@@ -340,7 +340,7 @@ void BaseServer::sendToClient(const void* packet, size_t size, intptr_t clientSo
         }
         oss << "[ENC+COMP OUT] fd=" << clientSock << ", size=" << out.size() << ", packetId=" << packetId << " (" << packetName << "): ";
         for (auto b : out) oss << std::hex << (int)b << " ";
-        LOG_DEBUG(oss.str());
+        LOG_DEBUG_EXT(oss.str());
     }
     server->send(out, clientSock);
 }

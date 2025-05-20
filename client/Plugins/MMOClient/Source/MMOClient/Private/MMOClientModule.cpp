@@ -1,5 +1,7 @@
 #include "MMOClientModule.h"
 #include <Modules/ModuleManager.h> // Use angle brackets for engine headers
+#include "MMOCharacter.h"
+#include "MMOPlayerMovementComponent.h"
 
 void FMMOClientModule::StartupModule()
 {

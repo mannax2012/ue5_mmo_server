@@ -34,6 +34,9 @@ public:
     UFUNCTION(BlueprintCallable, Category = "MMO|Char")
     void SelectCharacter(int32 CharId);
 
+    UFUNCTION(BlueprintCallable, Category = "MMO|Movement")
+    void SendMoveRequest(const FVector& NewLocation);
+
     virtual void Init() override;
     virtual void Shutdown() override;
 };
