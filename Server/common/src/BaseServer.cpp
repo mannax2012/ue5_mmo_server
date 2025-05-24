@@ -278,6 +278,7 @@ void BaseServer::mainLoop() {
         auto tickEnd = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(tickEnd - tickStart);
         if (elapsed < tickDuration) {
+            LOG_DEBUG("Tick " + std::to_string(tick) + " took " + std::to_string(elapsed.count()) + "ms, sleeping for " + std::to_string((tickDuration - elapsed).count()) + "ms.");
             std::this_thread::sleep_for(tickDuration - elapsed);
         }
     }

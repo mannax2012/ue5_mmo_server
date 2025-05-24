@@ -1,3 +1,4 @@
+#include "../include/BaseServer.h"
 #include "SocketServer.h"
 #include <thread>
 #include <atomic>
@@ -11,6 +12,8 @@
 #include <map>
 #include <unordered_map>
 #include "../include/Log.h"
+
+extern BaseServer* g_lastBaseServerInstance;
 
 // High-performance TCP server (cross-platform, non-blocking, multithreaded, failsafe, using Boost.Asio)
 class SocketServerImpl : public SocketServer {
@@ -84,6 +87,16 @@ private:
         auto socket = std::make_shared<boost::asio::ip::tcp::socket>(ioContext);
         acceptor.async_accept(*socket, [this, socket](const boost::system::error_code& ec) {
             if (!ec && running) {
+                // Read TCP_NODELAY config
+                bool nodelay = true;
+                if (g_lastBaseServerInstance) {
+                    nodelay = g_lastBaseServerInstance->GetConfig().getInt("tcp_nodelay", 1) > 0;
+                }
+                boost::system::error_code ec2;
+                socket->set_option(boost::asio::ip::tcp::no_delay(nodelay), ec2);
+                if (ec2) {
+                    LOG_ERROR("Failed to set TCP_NODELAY: " + ec2.message());
+                }
                 intptr_t sockId = reinterpret_cast<intptr_t>(socket.get());
                 clients[sockId] = socket;
                 if (onConnect) onConnect(sockId);

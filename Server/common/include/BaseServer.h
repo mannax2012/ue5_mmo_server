@@ -48,6 +48,7 @@ public:
     // Provide public accessors for shutdown logic
     std::unordered_map<intptr_t, SessionInfo>& GetSessionMap() { return sessionMap; }
     MySQLClient& GetMySQL() { return mysql; }
+    Config& GetConfig() { return config; } // NEW: Provide public accessor for config
 
 protected:
     bool loadConfig(int argc, char** argv);
