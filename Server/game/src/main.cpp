@@ -25,32 +25,27 @@ class GameServer : public BaseServer {
     ZoneManager zoneManager;
  
 
-    void handlePacket(const PacketHeader& header, const std::vector<uint8_t>& data, intptr_t clientSock) override {
-        // Use BaseServer's sessionMap for session tracking
-        auto& session = sessionMap[clientSock];
-
+    void handlePacket(const PacketHeader& header, const std::vector<uint8_t>& data, intptr_t clientSock, const sockaddr_in& clientAddr) override {
+        std::string endpointKey = EndpointToString(clientAddr);
+        auto& session = sessionMap[endpointKey];
+        session.clientSock = clientSock;
         //CHECK FOR LOGIN
         if(session.playerId == -1 && header.packetId != PACKET_C_CONNECT_REQUEST) {
             LOG_DEBUG("Session not logged in, dropping packet.");
             return;
         }
-
         switch (header.packetId) {
             case PACKET_C_CONNECT_REQUEST: {
                 C_ConnectRequest req;
                 if (data.size() < sizeof(C_ConnectRequest)) return;
                 std::memcpy(&req, data.data(), sizeof(C_ConnectRequest));
-
                 LOG_DEBUG(std::string("Received C_ConnectRequest from socket ") + std::to_string(clientSock));
-
-                // Extract sessionKey from packet (ensure null-termination)
                 std::string sessionKey(req.sessionKey, strnlen(req.sessionKey, sizeof(req.sessionKey)));
                 std::string redisSessionKey = "session_" + sessionKey;
                 std::map<std::string, std::string> sessionData;
                 bool redisOk = redis.hgetall(redisSessionKey, sessionData);
                 if (!redisOk || sessionData.empty()) {
                     LOG_ERROR("Session not found in Redis for key: " + redisSessionKey);
-                    // Optionally disconnect or send error to client
                     S_ConnectResult resp{};
                     resp.header.packetId = PACKET_S_CONNECT_RESULT;
                     resp.resultCode = 1; // fail
@@ -58,35 +53,28 @@ class GameServer : public BaseServer {
                     server->disconnect(clientSock);
                     return;
                 }
-                // Update session in sessionMap (SessionInfo struct)
                 if (sessionData.count("playerId")) session.playerId = std::stoi(sessionData["playerId"]);
                 if (sessionData.count("charId")) session.charId = std::stoi(sessionData["charId"]);
                 if (sessionData.count("username")) session.username = sessionData["username"];
                 if (sessionData.count("sessionKey")) session.sessionKey = sessionData["sessionKey"];
                 else session.sessionKey = sessionKey;
-
-                // Update Redis session with current fd
                 std::vector<std::pair<std::string, std::string>> updateFields = {
                     {"fd", std::to_string(clientSock)}
                 };
                 redis.hset(redisSessionKey, updateFields);
-
                 session.connected = true;
                 session.lastHeartbeat = std::chrono::steady_clock::now();
-                LOG_DEBUG("Session updated in sessionMap for socket " + std::to_string(clientSock) + ", sessionKey: " + session.sessionKey);
-                // Send connect result (success)
+                session.clientAddr = clientAddr;
+                LOG_DEBUG("Session updated in sessionMap for endpoint " + endpointKey + ", sessionKey: " + session.sessionKey);
                 S_ConnectResult resp{};
                 resp.header.packetId = PACKET_S_CONNECT_RESULT;
                 resp.resultCode = 0; // success
                 sendToClient(&resp, sizeof(resp), clientSock);
-
-                // After successful connect, create Player entity and add to ZoneManager
                 if (resp.resultCode == 0) {
                     auto player = std::make_shared<Player>();
                     player->InitFromDB(mysql, session.charId, session.username, session.playerId, &zoneManager);
                     zoneManager.AddEntityToZone(player->zoneId, player);
                     session.playerEntity = player;
-
                     S_Move resp{};
                     resp.header.packetId = PACKET_S_MOVE;
                     resp.charId = player->id;
@@ -104,14 +92,7 @@ class GameServer : public BaseServer {
                 LOG_DEBUG(std::string("Received C_Move from socket ") + std::to_string(clientSock));
                 auto player = session.playerEntity;
                 if (player) {
-                    player->MoveTo(req.x, req.y, req.z); 
-                   /** S_Move resp{};
-                    resp.header.packetId = PACKET_S_MOVE;
-                    resp.charId = player->id;
-                    resp.x = player->x;
-                    resp.y = player->y;
-                    resp.z = player->z;
-                    sendToClient(&resp, sizeof(resp), clientSock);              */
+                    player->MoveTo(req.x, req.y, req.z);
                 }
                 break;
             }
@@ -120,7 +101,6 @@ class GameServer : public BaseServer {
                 if (data.size() < sizeof(C_CombatAction)) return;
                 std::memcpy(&req, data.data(), sizeof(C_CombatAction));
                 LOG_DEBUG(std::string("Received C_CombatAction from socket ") + std::to_string(clientSock));
-                // TODO: Handle combat logic
                 break;
             }
             case PACKET_C_SHOP_BUY: {
@@ -128,7 +108,6 @@ class GameServer : public BaseServer {
                 if (data.size() < sizeof(C_ShopBuy)) return;
                 std::memcpy(&req, data.data(), sizeof(C_ShopBuy));
                 LOG_DEBUG(std::string("Received C_ShopBuy from socket ") + std::to_string(clientSock));
-                // TODO: Handle shop buy logic
                 break;
             }
             default:
@@ -143,20 +122,17 @@ class GameServer : public BaseServer {
         zoneManager.SetZoneSize(config.getInt("zone_size", 100));
         return result;
     }
-    void onClientDisconnected(intptr_t clientSock) {
-        LOG_DEBUG("Client disconnected: " + std::to_string(clientSock));
-        auto it = sessionMap.find(clientSock);
+    void onClientDisconnected(intptr_t clientSock, const sockaddr_in& clientAddr) override {
+        std::string endpointKey = EndpointToString(clientAddr);
+        auto it = sessionMap.find(endpointKey);
         if (it != sessionMap.end()) {
             //save to mysql 
             if (it->second.playerEntity) {
                 it->second.playerEntity->SaveToDB(mysql);
-            }
-            // Remove player entity from zone
-            if (it->second.playerEntity) {
                 zoneManager.RemoveEntityFromZone(it->second.playerEntity->zoneId, it->second.playerEntity->id);
             }
         }
-        BaseServer::onClientDisconnected(clientSock);
+        BaseServer::onClientDisconnected(clientSock, clientAddr);
     }
 };
 

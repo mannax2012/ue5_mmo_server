@@ -14,6 +14,10 @@
 #include <random>
 #include <chrono>
 #include <memory> // For std::shared_ptr
+#include <netinet/in.h> // For sockaddr_in
+#include <arpa/inet.h>
+#include <sstream>
+#include <string>
 
 class Player; // Forward declaration of Player
 
@@ -25,6 +29,8 @@ struct SessionInfo {
     std::string username;
     std::string sessionKey;
     std::shared_ptr<Player> playerEntity; // Pointer to the Player entity for this session
+    sockaddr_in clientAddr{}; // Store the original sockaddr_in for robust disconnect/timeout handling
+    intptr_t clientSock = 0; // Store the last known clientSock (for UDP, for logging/consistency)
 };
 
 class BaseServer {
@@ -34,10 +40,10 @@ public:
     static void SignalHandlerStatic(int signal);
     SocketServer* getSocketServer() { return server; }
 
-    // TCP session management hooks
-    virtual void onClientConnected(intptr_t clientSock);
-    virtual void onClientDisconnected(intptr_t clientSock);
-    virtual void handlePacket(const PacketHeader& header, const std::vector<uint8_t>& data, intptr_t clientSock) = 0;
+    // UDP session management hooks (now use endpoint)
+    virtual void onClientConnected(intptr_t clientSock, const sockaddr_in& clientAddr);
+    virtual void onClientDisconnected(intptr_t clientSock, const sockaddr_in& clientAddr);
+    virtual void handlePacket(const PacketHeader& header, const std::vector<uint8_t>& data, intptr_t clientSock, const sockaddr_in& clientAddr) = 0;
 
     void sendToClient(const void* packet, size_t size, intptr_t clientSock);
 
@@ -46,7 +52,7 @@ public:
     static constexpr int HEARTBEAT_TIMEOUT_SEC = 12;
 
     // Provide public accessors for shutdown logic
-    std::unordered_map<intptr_t, SessionInfo>& GetSessionMap() { return sessionMap; }
+    std::unordered_map<std::string, SessionInfo>& GetSessionMap() { return sessionMap; }
     MySQLClient& GetMySQL() { return mysql; }
     Config& GetConfig() { return config; } // NEW: Provide public accessor for config
 
@@ -70,15 +76,23 @@ protected:
     std::string redisKey;
     int num_sessions;
     bool mysqlConnected = false; // NEW: shared connection state
-    std::unordered_map<intptr_t, SessionInfo> sessionMap; // Track connected clients and heartbeat
+    std::unordered_map<std::string, SessionInfo> sessionMap; // Track connected clients by endpoint (IP:port)
 
     static std::string GenerateUniqueId();
     static void RegisterServerInRedis(RedisClient& redis, const std::string& key, const std::string& ip, int port, int num_sessions);
 
     // Heartbeat helpers
-    void handleHeartbeatPacket(const std::vector<uint8_t>& data, intptr_t clientSock);
+    void handleHeartbeatPacket(const std::vector<uint8_t>& data, intptr_t clientSock, const sockaddr_in& clientAddr);
     void checkHeartbeatTimeouts();
 };
 
 // Inline static member definition for header-only usage
 inline std::atomic<bool> BaseServer::running{true};
+
+inline std::string EndpointToString(const sockaddr_in& addr) {
+    char ip[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &(addr.sin_addr), ip, INET_ADDRSTRLEN);
+    std::ostringstream oss;
+    oss << ip << ":" << ntohs(addr.sin_port);
+    return oss.str();
+}

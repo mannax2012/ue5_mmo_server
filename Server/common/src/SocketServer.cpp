@@ -15,20 +15,19 @@
 
 extern BaseServer* g_lastBaseServerInstance;
 
-// High-performance TCP server (cross-platform, non-blocking, multithreaded, failsafe, using Boost.Asio)
+// High-performance UDP server (cross-platform, non-blocking, multithreaded, failsafe, using Boost.Asio)
 class SocketServerImpl : public SocketServer {
 public:
-    SocketServerImpl() : ioContext(), acceptor(ioContext), running(false) {}
+    SocketServerImpl() : ioContext(), socket(ioContext), running(false) {}
     ~SocketServerImpl() { stop(); }
     bool start(const char* ip, int port) override {
         try {
-            boost::asio::ip::tcp::endpoint endpoint(boost::asio::ip::address::from_string(ip), port);
-            acceptor.open(endpoint.protocol());
-            acceptor.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true));
-            acceptor.bind(endpoint);
-            acceptor.listen();
+            boost::asio::ip::udp::endpoint endpoint(boost::asio::ip::address::from_string(ip), port);
+            socket.open(endpoint.protocol());
+            socket.bind(endpoint);
+            LOG_DEBUG("UDP socket successfully bound to " + std::string(ip) + ":" + std::to_string(port));
             running = true;
-            doAccept();
+            doRead();
             threads.emplace_back([this]() { ioContext.run(); });
             return true;
         } catch (const std::exception& e) {
@@ -45,22 +44,16 @@ public:
         threads.clear();
     }
     void send(const std::vector<uint8_t>& data, intptr_t clientSock) override {
-        auto it = clients.find(clientSock);
-        if (it != clients.end()) {
-            // Prepend 4-byte length prefix (network byte order)
-            uint32_t len = htonl(static_cast<uint32_t>(data.size()));
-            std::vector<uint8_t> out;
-            out.resize(4 + data.size());
-            std::memcpy(out.data(), &len, 4);
-            std::memcpy(out.data() + 4, data.data(), data.size());
-            // Log the actual outgoing packet (including TCP length prefix)
-            {
-                std::ostringstream oss;
-                oss << "[ACTUAL OUT] fd=" << clientSock << ", size=" << out.size() << ": ";
-                for (size_t i = 0; i < out.size(); ++i) oss << std::hex << (int)out[i] << " ";
-                LOG_DEBUG_EXT(oss.str());
-            }
-            boost::asio::async_write(*it->second, boost::asio::buffer(out),
+        // reinterpret clientSock as endpoint pointer
+        auto remote_endpoint = reinterpret_cast<boost::asio::ip::udp::endpoint*>(clientSock);
+        if (remote_endpoint) {
+            // Prepend 4-byte length prefix to the payload for UDP framing
+            uint32_t packetLen = data.size();
+            uint32_t netPacketLen = htonl(packetLen);
+            std::vector<uint8_t> sendBuf(4 + packetLen);
+            std::memcpy(sendBuf.data(), &netPacketLen, 4);
+            std::memcpy(sendBuf.data() + 4, data.data(), packetLen);
+            socket.async_send_to(boost::asio::buffer(sendBuf), *remote_endpoint,
                 [](const boost::system::error_code&, std::size_t){});
         }
     }
@@ -71,80 +64,45 @@ public:
         this->onConnect = onConnect;
         this->onDisconnect = onDisconnect;
     }
-    void disconnect(intptr_t clientSock) override {
-        auto it = clients.find(clientSock);
-        if (it != clients.end()) {
-            boost::system::error_code ec;
-            it->second->shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
-            it->second->close(ec);
-            clients.erase(it);
-            if (onDisconnect) onDisconnect(clientSock);
-            LOG_DEBUG("SocketServerImpl: Disconnected client fd=" + std::to_string(clientSock));
-        }
+    void disconnect(intptr_t /*clientSock*/) override {
+        // UDP is connectionless; nothing to do
     }
 private:
-    void doAccept() {
-        auto socket = std::make_shared<boost::asio::ip::tcp::socket>(ioContext);
-        acceptor.async_accept(*socket, [this, socket](const boost::system::error_code& ec) {
-            if (!ec && running) {
-                // Read TCP_NODELAY config
-                bool nodelay = true;
-                if (g_lastBaseServerInstance) {
-                    nodelay = g_lastBaseServerInstance->GetConfig().getInt("tcp_nodelay", 1) > 0;
-                }
-                boost::system::error_code ec2;
-                socket->set_option(boost::asio::ip::tcp::no_delay(nodelay), ec2);
-                if (ec2) {
-                    LOG_ERROR("Failed to set TCP_NODELAY: " + ec2.message());
-                }
-                intptr_t sockId = reinterpret_cast<intptr_t>(socket.get());
-                clients[sockId] = socket;
-                if (onConnect) onConnect(sockId);
-                doRead(socket, sockId);
-            }
-            if (running) doAccept();
-        });
-    }
-    void doRead(std::shared_ptr<boost::asio::ip::tcp::socket> socket, intptr_t sockId) {
+    void doRead() {
         auto buf = std::make_shared<std::vector<uint8_t>>(2048);
-        socket->async_read_some(boost::asio::buffer(*buf),
-            [this, socket, buf, sockId](const boost::system::error_code& ec, std::size_t n) {
+        auto remote_endpoint = std::make_shared<boost::asio::ip::udp::endpoint>();
+        socket.async_receive_from(boost::asio::buffer(*buf), *remote_endpoint,
+            [this, buf, remote_endpoint](const boost::system::error_code& ec, std::size_t n) {
+                LOG_DEBUG("UDP receive lambda called: ec=" + std::to_string(ec.value()) + ", n=" + std::to_string(n));
                 if (!ec && n > 0) {
-                    // Accumulate data in per-client buffer
-                    auto& buffer = recvBuffers[sockId];
-                    buffer.insert(buffer.end(), buf->begin(), buf->begin() + n);
-                    // Process all complete packets in the buffer
-                    size_t offset = 0;
-                    while (buffer.size() - offset >= 4) {
+                    // Emulate TCP framing: expect [4-byte length][payload]
+                    if (n < 4) {
+                        LOG_ERROR("Received UDP packet too small for length prefix");
+                    } else {
                         uint32_t packetLen = 0;
-                        std::memcpy(&packetLen, buffer.data() + offset, 4);
+                        std::memcpy(&packetLen, buf->data(), 4);
                         packetLen = ntohl(packetLen);
-                        if (buffer.size() - offset < 4 + packetLen)
-                            break; // Not enough data for a full packet
-                        // Extract only the payload (without length prefix)
-                        std::vector<uint8_t> payload(buffer.begin() + offset + 4, buffer.begin() + offset + 4 + packetLen);
-                        if (handler) handler(payload, sockId);
-                        offset += 4 + packetLen;
+                        if (n < 4 + packetLen) {
+                            LOG_ERROR("Received UDP packet smaller than stated length");
+                        } else {
+                            std::vector<uint8_t> payload(buf->begin() + 4, buf->begin() + 4 + packetLen);
+                            // Convert boost::asio::ip::udp::endpoint to sockaddr_in
+                            sockaddr_in clientAddr{};
+                            clientAddr.sin_family = AF_INET;
+                            clientAddr.sin_port = htons(remote_endpoint->port());
+                            clientAddr.sin_addr.s_addr = htonl(remote_endpoint->address().to_v4().to_ulong());
+                            if (handler) handler(payload, reinterpret_cast<intptr_t>(remote_endpoint.get()), clientAddr);
+                        }
                     }
-                    // Remove processed bytes
-                    if (offset > 0) buffer.erase(buffer.begin(), buffer.begin() + offset);
-                    doRead(socket, sockId);
-                } else {
-                    clients.erase(sockId);
-                    recvBuffers.erase(sockId);
-                    if (onDisconnect) onDisconnect(sockId);
                 }
+                doRead();
             });
     }
     boost::asio::io_context ioContext;
-    boost::asio::ip::tcp::acceptor acceptor;
+    boost::asio::ip::udp::socket socket;
     std::atomic<bool> running;
     std::vector<std::thread> threads;
-    std::map<intptr_t, std::shared_ptr<boost::asio::ip::tcp::socket>> clients;
-    std::unordered_map<intptr_t, std::vector<uint8_t>> recvBuffers; // Per-client receive buffer
     SocketPacketHandler handler;
-    SocketConnectionHandler onConnect;
-    SocketConnectionHandler onDisconnect;
 };
 
 SocketServer* CreateSocketServer() { return new SocketServerImpl(); }

@@ -21,6 +21,11 @@ THIRD_PARTY_INCLUDES_END
 #include "MMOClientDelegates.h"
 #include "MMOPlayerMovementComponent.h"
 
+// --- UDP address storage ---
+TSharedPtr<FInternetAddr> AuthServerAddr;
+TSharedPtr<FInternetAddr> GameServerAddr;
+TSharedPtr<FInternetAddr> ChatServerAddr;
+
 // Define a log category for MMOClient
 DEFINE_LOG_CATEGORY_STATIC(LogMMOClient, Log, All);
 
@@ -38,6 +43,11 @@ static void SerializeStruct(const T& packet, TArray<uint8>& out)
 {
     out.SetNumUninitialized(sizeof(T));
     FMemory::Memcpy(out.GetData(), &packet, sizeof(T));
+    // --- Automatic outgoing packet logging ---
+    // Assumes all packets have a 'header' member with 'packetId'
+    const uint8* headerPtr = reinterpret_cast<const uint8*>(&packet.header);
+
+    UE_LOG(LogMMOClient, Log, TEXT("[OUT] packetId: %d | Type: %hs"), packet.header.packetId,  PacketTypeToString(packet.header.packetId));
 }
 
 template<typename T>
@@ -133,36 +143,50 @@ void UMMOClient::ConnectAuth(const FString& Host, int32 Port)
 {
     LastAuthHost = Host;
     LastAuthPort = Port;
-    UE_LOG(LogMMOClient, Log, TEXT("Connecting to Auth server: %s:%d"), *Host, Port);
+    UE_LOG(LogMMOClient, Log, TEXT("Connecting to Auth server (UDP): %s:%d"), *Host, Port);
     ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
-    AuthSocket = MakeShareable(SocketSubsystem->CreateSocket(NAME_Stream, TEXT("AuthSocket"), false));
-    AuthSocket->SetNonBlocking(true); // Ensure non-blocking mode for safe disconnect detection
-    TSharedRef<FInternetAddr> Addr = SocketSubsystem->CreateInternetAddr();
-    bool bIsValid = false;
-    Addr->SetIp(*Host, bIsValid);
-    Addr->SetPort(Port);
+    // Only create socket if not already valid
+    if (!AuthSocket.IsValid()) {
+        AuthSocket = MakeShareable(SocketSubsystem->CreateSocket(NAME_DGram, TEXT("AuthSocket"), FNetworkProtocolTypes::IPv4));
+        // Explicitly bind to a local ephemeral port for UDP
+        TSharedRef<FInternetAddr> LocalAddr = SocketSubsystem->CreateInternetAddr();
+        LocalAddr->SetAnyAddress();
+        LocalAddr->SetPort(0); // 0 = let OS pick ephemeral port
+        bool bDidBind = AuthSocket->Bind(*LocalAddr);
+        if (!bDidBind) {
+            UE_LOG(LogMMOClient, Error, TEXT("Failed to bind AuthSocket to local address!"));
+        }
+        AuthSocket->SetNonBlocking(true);
+        // Log the local address and port after binding
+        TSharedRef<FInternetAddr> BoundAddr = SocketSubsystem->CreateInternetAddr();
+        AuthSocket->GetAddress(*BoundAddr);
+        UE_LOG(LogMMOClient, Log, TEXT("AuthSocket bound to: %s"), *BoundAddr->ToString(true));
+    }
+    // Use FIPv4Address to guarantee IPv4
+    FIPv4Address OutIp;
+    FIPv4Address::Parse(Host, OutIp);
+    AuthServerAddr = SocketSubsystem->CreateInternetAddr();
+    AuthServerAddr->SetIp(OutIp.Value);
+    AuthServerAddr->SetPort(Port);
     SetClientState(EMMOClientState::CONNECTING_AUTH);
-    DisconnectGame(); // Disconnect Game socket if connected
+    DisconnectGame();
     UWorld* World = GetWorld();
     if (!World) {
         UE_LOG(LogMMOClient, Error, TEXT("GetWorld() returned nullptr!"));
         return;
     }
-    if (AuthSocket->Connect(*Addr))
-    {
-        if (World) {
-            World->GetTimerManager().SetTimer(AuthRecvHandle, [this]() { OnReceive(AuthSocket, TEXT("Auth")); }, 0.01f, true);
-            UE_LOG(LogMMOClient, Log, TEXT("Auth receive timer set!"));
-        } else {
-            UE_LOG(LogMMOClient, Error, TEXT("GetWorld() returned nullptr, timer not set!"));
-        }
-    }
-    else {
-        UE_LOG(LogMMOClient, Error, TEXT("Failed to connect to Auth server."));
-        AuthSocket.Reset();
-        OnAuthDisconnected.Broadcast();
-        //SetClientState(EMMOClientState::DISCONNECTED);
-    }
+    // No connect for UDP, just start receive timer
+    World->GetTimerManager().SetTimer(AuthRecvHandle, [this]() { OnReceive(AuthSocket, TEXT("Auth")); }, 0.01f, true);
+    UE_LOG(LogMMOClient, Log, TEXT("Auth receive timer set! (UDP)"));
+    // Send C_ConnectRequest to Auth server immediately (UDP handshake)
+    C_ConnectRequest connectReq;
+    FMemory::Memzero(&connectReq, sizeof(connectReq));
+    connectReq.header.packetId = PACKET_C_CONNECT_REQUEST;
+    FTCHARToUTF8 sessionKeyUtf8(*GetSessionKey());
+    FCStringAnsi::Strncpy(connectReq.sessionKey, sessionKeyUtf8.Get(), sizeof(connectReq.sessionKey) - 1);
+    TArray<uint8> connectReqData;
+    SerializeStruct(connectReq, connectReqData);
+    SendToAuth(connectReqData);
     if (!World->GetTimerManager().IsTimerActive(TickTimerHandle))
     {
         World->GetTimerManager().SetTimer(TickTimerHandle, this, &UMMOClient::TickSockets, 1.0f, true);
@@ -174,76 +198,63 @@ void UMMOClient::ConnectGame(const FString& Host, int32 Port)
 {
     LastGameHost = Host;
     LastGamePort = Port;
-    UE_LOG(LogMMOClient, Log, TEXT("Connecting to Game server: %s:%d"), *Host, Port);
+    UE_LOG(LogMMOClient, Log, TEXT("Connecting to Game server (UDP): %s:%d"), *Host, Port);
     ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
-    GameSocket = MakeShareable(SocketSubsystem->CreateSocket(NAME_Stream, TEXT("GameSocket"), false));
-    GameSocket->SetNonBlocking(true); // Ensure non-blocking mode for safe disconnect detection
-    TSharedRef<FInternetAddr> Addr = SocketSubsystem->CreateInternetAddr();
-    bool bIsValid = false;
-    Addr->SetIp(*Host, bIsValid);
-    Addr->SetPort(Port);
-    SetClientState(EMMOClientState::CONNECTING_GAME);
-    DisconnectAuth(); // Disconnect Auth socket if connected
-    if (GameSocket->Connect(*Addr))
-    {
-       
-        if (UWorld* World = GetWorld()) {
-            SetClientState(EMMOClientState::GAME);
-            World->GetTimerManager().SetTimer(GameRecvHandle, [this]() { OnReceive(GameSocket, TEXT("Game")); }, 0.01f, true);
-            // Send C_ConnectRequest with session key
-            C_ConnectRequest connectReq;
-            FMemory::Memzero(&connectReq, sizeof(connectReq));
-            connectReq.header.packetId = PACKET_C_CONNECT_REQUEST;
-            FTCHARToUTF8 sessionKeyUtf8(*GetSessionKey());
-            FCStringAnsi::Strncpy(connectReq.sessionKey, sessionKeyUtf8.Get(), sizeof(connectReq.sessionKey) - 1);
-            TArray<uint8> connectReqData;
-            SerializeStruct(connectReq, connectReqData);
-            SendToGame(connectReqData);
-            StartHeartbeatForSocket(TEXT("Game"));
-            UE_LOG(LogMMOClient, Log, TEXT("Game connection established."));
-            OnGameConnected.Broadcast();
-        } else {
-            UE_LOG(LogMMOClient, Error, TEXT("GetWorld() returned nullptr, timer not set!"));
-        }
+    // Only create socket if not already valid
+    if (!GameSocket.IsValid()) {
+        GameSocket = MakeShareable(SocketSubsystem->CreateSocket(NAME_DGram, TEXT("GameSocket"), FNetworkProtocolTypes::IPv4));
+        GameSocket->SetNonBlocking(true);
+        // Log the local address and port after binding
+        TSharedRef<FInternetAddr> GameBoundAddr = SocketSubsystem->CreateInternetAddr();
+        GameSocket->GetAddress(*GameBoundAddr);
+        UE_LOG(LogMMOClient, Log, TEXT("GameSocket bound to: %s"), *GameBoundAddr->ToString(true));
     }
-    else {
-        // If the connection fails, reset the socket and notify the disconnection
-        // This is important to avoid dangling pointers and ensure proper cleanup
-        // before attempting to reconnect or handle the error
-        UE_LOG(LogMMOClient, Error, TEXT("Failed to connect to Game server."));
-        GameSocket.Reset();
-        OnGameDisconnected.Broadcast();
-        SetClientState(EMMOClientState::CONNECTING_AUTH);
+    // Use FIPv4Address to guarantee IPv4
+    FIPv4Address OutIp;
+    FIPv4Address::Parse(Host, OutIp);
+    GameServerAddr = SocketSubsystem->CreateInternetAddr();
+    GameServerAddr->SetIp(OutIp.Value);
+    GameServerAddr->SetPort(Port);
+    SetClientState(EMMOClientState::CONNECTING_GAME);
+    DisconnectAuth();
+    if (UWorld* World = GetWorld()) {
+        SetClientState(EMMOClientState::GAME);
+        World->GetTimerManager().SetTimer(GameRecvHandle, [this]() { OnReceive(GameSocket, TEXT("Game")); }, 0.01f, true);
+        // Send C_ConnectRequest with session key
+        C_ConnectRequest connectReq;
+        FMemory::Memzero(&connectReq, sizeof(connectReq));
+        connectReq.header.packetId = PACKET_C_CONNECT_REQUEST;
+        FTCHARToUTF8 sessionKeyUtf8(*GetSessionKey());
+        FCStringAnsi::Strncpy(connectReq.sessionKey, sessionKeyUtf8.Get(), sizeof(connectReq.sessionKey) - 1);
+        TArray<uint8> connectReqData;
+        SerializeStruct(connectReq, connectReqData);
+        SendToGame(connectReqData);
+        UE_LOG(LogMMOClient, Log, TEXT("Game connection established (UDP)."));
+        OnGameConnected.Broadcast();
+    } else {
+        UE_LOG(LogMMOClient, Error, TEXT("GetWorld() returned nullptr, timer not set!"));
     }
 }
 
 void UMMOClient::ConnectChat(const FString& Host, int32 Port)
 {
-    UE_LOG(LogMMOClient, Log, TEXT("Connecting to Chat server: %s:%d"), *Host, Port);
+    UE_LOG(LogMMOClient, Log, TEXT("Connecting to Chat server (UDP): %s:%d"), *Host, Port);
     ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
-    ChatSocket = MakeShareable(SocketSubsystem->CreateSocket(NAME_Stream, TEXT("ChatSocket"), false));
-    ChatSocket->SetNonBlocking(true); // Ensure non-blocking mode for safe disconnect detection
-    TSharedRef<FInternetAddr> Addr = SocketSubsystem->CreateInternetAddr();
-    bool bIsValid = false;
-    Addr->SetIp(*Host, bIsValid);
-    Addr->SetPort(Port);
-
-    if (ChatSocket->Connect(*Addr))
-    {
-        UE_LOG(LogMMOClient, Log, TEXT("Chat connection established."));
-        OnChatConnected.Broadcast();
-        if (UWorld* World = GetWorld()) {
-            World->GetTimerManager().SetTimer(ChatRecvHandle, [this]() { OnReceive(ChatSocket, TEXT("Chat")); }, 0.01f, true);
-            StartHeartbeatForSocket(TEXT("Chat"));
-            UE_LOG(LogMMOClient, Log, TEXT("Chat receive timer set!"));
-        } else {
-            UE_LOG(LogMMOClient, Error, TEXT("GetWorld() returned nullptr, timer not set!"));
-        }
+    // Only create socket if not already valid
+    if (!ChatSocket.IsValid()) {
+        ChatSocket = MakeShareable(SocketSubsystem->CreateSocket(NAME_DGram, TEXT("ChatSocket"), FNetworkProtocolTypes::IPv4));
+        ChatSocket->SetNonBlocking(true);
+        // Log the local address and port after binding
+        TSharedRef<FInternetAddr> ChatBoundAddr = SocketSubsystem->CreateInternetAddr();
+        ChatSocket->GetAddress(*ChatBoundAddr);
+        UE_LOG(LogMMOClient, Log, TEXT("ChatSocket bound to: %s"), *ChatBoundAddr->ToString(true));
     }
-    else {
-        UE_LOG(LogMMOClient, Error, TEXT("Failed to connect to Chat server."));
-        ChatSocket.Reset();
-        OnChatDisconnected.Broadcast();
+    if (UWorld* World = GetWorld()) {
+        World->GetTimerManager().SetTimer(ChatRecvHandle, [this]() { OnReceive(ChatSocket, TEXT("Chat")); }, 0.01f, true);
+        UE_LOG(LogMMOClient, Log, TEXT("Chat receive timer set! (UDP)"));
+        OnChatConnected.Broadcast();
+    } else {
+        UE_LOG(LogMMOClient, Error, TEXT("GetWorld() returned nullptr, timer not set!"));
     }
 }
 
@@ -254,8 +265,7 @@ void UMMOClient::SendToAuth(const TArray<uint8>& Data)
     for (int32 i = 0; i < Data.Num(); ++i) HexDump += FString::Printf(TEXT("%02x "), Data[i]);
     UE_LOG(LogMMOClient, Verbose, TEXT("[RAW OUT] Data: %s"), *HexDump);
     TArray<uint8> Out;
-    if (EncryptAndCompress(Data, Out) && AuthSocket.IsValid()) {
-        // Prepend 4-byte length prefix (network byte order)
+    if (EncryptAndCompress(Data, Out) && AuthSocket.IsValid() && AuthServerAddr.IsValid()) {
         uint32 PacketLen = Out.Num();
         uint32 NetPacketLen = htonl(PacketLen);
         TArray<uint8> SendBuf;
@@ -265,8 +275,18 @@ void UMMOClient::SendToAuth(const TArray<uint8>& Data)
         FString HexDump2;
         for (int32 i = 0; i < SendBuf.Num(); ++i) HexDump2 += FString::Printf(TEXT("%02x "), SendBuf[i]);
         UE_LOG(LogMMOClient, Verbose, TEXT("[ENC+COMP+LEN OUT] Data: %s"), *HexDump2);
-        int32 Sent = 0; AuthSocket->Send(SendBuf.GetData(), SendBuf.Num(), Sent);
+        int32 Sent = 0;
+        bool bSendResult = AuthSocket->SendTo(SendBuf.GetData(), SendBuf.Num(), Sent, *AuthServerAddr);
+        if (!bSendResult || Sent != SendBuf.Num()) {
+            const TCHAR* SocketError = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->GetSocketError(ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->GetLastErrorCode());
+            UE_LOG(LogMMOClient, Error, TEXT("SendTo Auth failed! Sent=%d/%d, Error: %s"), Sent, SendBuf.Num(), SocketError ? SocketError : TEXT("Unknown"));
+        } else {
+            UE_LOG(LogMMOClient, Verbose, TEXT("SendTo Auth succeeded. Sent %d bytes."), Sent);
+        }
     }
+
+    // Log the remote address before sending
+    UE_LOG(LogMMOClient, Log, TEXT("Sending to AuthServerAddr: %s"), *AuthServerAddr->ToString(true));
 }
 
 void UMMOClient::SendToGame(const TArray<uint8>& Data)
@@ -276,8 +296,7 @@ void UMMOClient::SendToGame(const TArray<uint8>& Data)
     for (int32 i = 0; i < Data.Num(); ++i) HexDump += FString::Printf(TEXT("%02x "), Data[i]);
     UE_LOG(LogMMOClient, Verbose, TEXT("[RAW OUT] Data: %s"), *HexDump);
     TArray<uint8> Out;
-    if (EncryptAndCompress(Data, Out) && GameSocket.IsValid()) {
-        // Prepend 4-byte length prefix (network byte order)
+    if (EncryptAndCompress(Data, Out) && GameSocket.IsValid() && GameServerAddr.IsValid()) {
         uint32 PacketLen = Out.Num();
         uint32 NetPacketLen = htonl(PacketLen);
         TArray<uint8> SendBuf;
@@ -287,24 +306,43 @@ void UMMOClient::SendToGame(const TArray<uint8>& Data)
         FString HexDump2;
         for (int32 i = 0; i < SendBuf.Num(); ++i) HexDump2 += FString::Printf(TEXT("%02x "), SendBuf[i]);
         UE_LOG(LogMMOClient, Verbose, TEXT("[ENC+COMP+LEN OUT] Data: %s"), *HexDump2);
-        int32 Sent = 0; GameSocket->Send(SendBuf.GetData(), SendBuf.Num(), Sent);
+        int32 Sent = 0;
+        bool bSendResult = GameSocket->SendTo(SendBuf.GetData(), SendBuf.Num(), Sent, *GameServerAddr);
+        if (!bSendResult || Sent != SendBuf.Num()) {
+            const TCHAR* SocketError = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->GetSocketError(ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->GetLastErrorCode());
+            UE_LOG(LogMMOClient, Error, TEXT("SendTo Game failed! Sent=%d/%d, Error: %s"), Sent, SendBuf.Num(), SocketError ? SocketError : TEXT("Unknown"));
+        } else {
+            UE_LOG(LogMMOClient, Verbose, TEXT("SendTo Game succeeded. Sent %d bytes."), Sent);
+        }
     }
+
+    // Log the remote address before sending
+    UE_LOG(LogMMOClient, Log, TEXT("Sending to GameServerAddr: %s"), *GameServerAddr->ToString(true));
 }
 
 void UMMOClient::SendToChat(const TArray<uint8>& Data)
 {
     UE_LOG(LogMMOClient, Verbose, TEXT("Sending data to Chat server. Size: %d bytes"), Data.Num());
     TArray<uint8> Out;
-    if (EncryptAndCompress(Data, Out) && ChatSocket.IsValid()) {
-        // Prepend 4-byte length prefix (network byte order)
+    if (EncryptAndCompress(Data, Out) && ChatSocket.IsValid() && ChatServerAddr.IsValid()) {
         uint32 PacketLen = Out.Num();
         uint32 NetPacketLen = htonl(PacketLen);
         TArray<uint8> SendBuf;
         SendBuf.SetNumUninitialized(4 + PacketLen);
         FMemory::Memcpy(SendBuf.GetData(), &NetPacketLen, 4);
         FMemory::Memcpy(SendBuf.GetData() + 4, Out.GetData(), PacketLen);
-        int32 Sent = 0; ChatSocket->Send(SendBuf.GetData(), SendBuf.Num(), Sent);
+        int32 Sent = 0;
+        bool bSendResult = ChatSocket->SendTo(SendBuf.GetData(), SendBuf.Num(), Sent, *ChatServerAddr);
+        if (!bSendResult || Sent != SendBuf.Num()) {
+            const TCHAR* SocketError = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->GetSocketError(ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->GetLastErrorCode());
+            UE_LOG(LogMMOClient, Error, TEXT("SendTo Chat failed! Sent=%d/%d, Error: %s"), Sent, SendBuf.Num(), SocketError ? SocketError : TEXT("Unknown"));
+        } else {
+            UE_LOG(LogMMOClient, Verbose, TEXT("SendTo Chat succeeded. Sent %d bytes."), Sent);
+        }
     }
+
+    // Log the remote address before sending
+    UE_LOG(LogMMOClient, Log, TEXT("Sending to ChatServerAddr: %s"), *ChatServerAddr->ToString(true));
 }
 
 void UMMOClient::DisconnectAll()
@@ -363,12 +401,13 @@ void UMMOClient::OnReceive(TSharedPtr<FSocket> Socket, FString ServerType)
     //UE_LOG(LogMMOClient, Verbose, TEXT("OnReceive Socket VALID"));
     uint32 PendingDataSize = 0;
     TArray<uint8>& Buffer = ReceiveBuffers.FindOrAdd(ServerType);
+    TSharedRef<FInternetAddr> Sender = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->CreateInternetAddr();
     while (Socket->HasPendingData(PendingDataSize))
     {
         TArray<uint8> Data; Data.SetNumUninitialized(PendingDataSize);
         int32 BytesRead = 0;
-        Socket->Recv(Data.GetData(), Data.Num(), BytesRead);
-        UE_LOG(LogMMOClient, Verbose, TEXT("[RAW IN] Received %d bytes from %s server."), BytesRead, *ServerType);
+        Socket->RecvFrom(Data.GetData(), Data.Num(), BytesRead, *Sender);
+        UE_LOG(LogMMOClient, Verbose, TEXT("[RAW IN] Received %d bytes from %s server (UDP)."), BytesRead, *ServerType);
         FString HexDump;
         for (int32 i = 0; i < Data.Num(); ++i) HexDump += FString::Printf(TEXT("%02x "), Data[i]);
         UE_LOG(LogMMOClient, Verbose, TEXT("[RAW IN] Data: %s"), *HexDump);
@@ -385,17 +424,21 @@ void UMMOClient::OnReceive(TSharedPtr<FSocket> Socket, FString ServerType)
         uint32 PacketLen = 0;
         FMemory::Memcpy(&PacketLen, Buffer.GetData() + Offset, 4);
         PacketLen = ntohl(PacketLen);
+        // Defensive: check for absurdly large or negative PacketLen
+        if (PacketLen <= 0 || PacketLen > 65536) {
+            UE_LOG(LogMMOClient, Error, TEXT("[FATAL] Invalid UDP packet length: %u from %s server. Dropping buffer."), PacketLen, *ServerType);
+            Buffer.SetNum(0);
+            break;
+        }
         if (Buffer.Num() - Offset < 4 + (int32)PacketLen)
             break; // Not enough data for a full packet
         // Extract one packet (including length prefix)
-        TArray<uint8> OnePacket;
-        OnePacket.SetNumUninitialized(4 + PacketLen);
-        FMemory::Memcpy(OnePacket.GetData(), Buffer.GetData() + Offset, 4 + PacketLen);
+        // --- FIX: For UDP, do not copy to OnePacket, just use Buffer directly ---
         // Remove length prefix for processing
         TArray<uint8> Payload;
         Payload.SetNumUninitialized(PacketLen);
-        FMemory::Memcpy(Payload.GetData(), OnePacket.GetData() + 4, PacketLen);
-        // Extract 4-byte uncompressed size prefix
+        FMemory::Memcpy(Payload.GetData(), Buffer.GetData() + Offset + 4, PacketLen);
+        // Defensive: check for LZ4 uncompressed size prefix
         if (Payload.Num() < 4) {
             UE_LOG(LogMMOClient, Error, TEXT("[DECOMPRESS FAIL] Packet too short for LZ4 size prefix from %s server."), *ServerType);
             Offset += 4 + PacketLen;
@@ -404,6 +447,12 @@ void UMMOClient::OnReceive(TSharedPtr<FSocket> Socket, FString ServerType)
         uint32 UncompressedSize = 0;
         FMemory::Memcpy(&UncompressedSize, Payload.GetData(), 4);
         UncompressedSize = ntohl(UncompressedSize);
+        // Defensive: check for absurdly large or negative UncompressedSize
+        if (UncompressedSize <= 0 || UncompressedSize > 65536) {
+            UE_LOG(LogMMOClient, Error, TEXT("[FATAL] Invalid LZ4 uncompressed size: %u from %s server. Dropping buffer."), UncompressedSize, *ServerType);
+            Buffer.SetNum(0);
+            break;
+        }
         TArray<uint8> CompressedData;
         CompressedData.SetNumUninitialized(Payload.Num() - 4);
         FMemory::Memcpy(CompressedData.GetData(), Payload.GetData() + 4, Payload.Num() - 4);
@@ -426,6 +475,17 @@ void UMMOClient::OnReceive(TSharedPtr<FSocket> Socket, FString ServerType)
         for (int32 i = 0; i < Plain.Num(); ++i) HexDumpPlain += FString::Printf(TEXT("%02x "), Plain[i]);
         UE_LOG(LogMMOClient, Verbose, TEXT("[DECRYPT OUT] Data: %s"), *HexDumpPlain);
         UE_LOG(LogMMOClient, Verbose, TEXT("Decrypted and decompressed packet from %s server. Size: %d bytes"), *ServerType, Plain.Num());
+        // Log the packet type
+        if (Plain.Num() < sizeof(PacketHeader)) {
+            UE_LOG(LogMMOClient, Error, TEXT("[FATAL] Packet too small after decryption from %s server. Dropping buffer."), *ServerType);
+            Buffer.SetNum(0);
+            break;
+        }
+        PacketHeader header;
+        FMemory::Memcpy(&header, Plain.GetData(), sizeof(PacketHeader));
+        const char* PacketName = PacketTypeToString(header.packetId);
+        UE_LOG(LogMMOClient, Verbose, TEXT("Received packet from %s server. packetId: %d (%hs), Size: %d bytes"), *ServerType, header.packetId, PacketName, Plain.Num());
+
         if (ServerType == TEXT("Auth")) HandleAuthPacket(Plain);
         else if (ServerType == TEXT("Game")) HandleGamePacket(Plain);
         else if (ServerType == TEXT("Chat")) HandleChatPacket(Plain);
@@ -589,7 +649,8 @@ void UMMOClient::HandleGamePacket(const TArray<uint8>& Data)
                 // Only now consider the connection established and send a connect request
                 if (CurrentState == EMMOClientState::CONNECTING_GAME) {
                     SetClientState(EMMOClientState::GAME);
-                     // Send C_ConnectRequest with session key
+                    StartHeartbeatForSocket(TEXT("Game"));
+                    // Send C_ConnectRequest with session key
                     C_ConnectRequest connectReq;
                     FMemory::Memzero(&connectReq, sizeof(connectReq));
                     connectReq.header.packetId = PACKET_C_CONNECT_REQUEST;
@@ -628,6 +689,10 @@ void UMMOClient::HandleChatPacket(const TArray<uint8>& Data)
             if (DeserializeStruct(Data, resp)) {
                 ChatHeartbeat.LastReceivedTimestamp = FDateTime::UtcNow().ToUnixTimestamp();
                 UE_LOG(LogMMOClient, Verbose, TEXT("Received S_Heartbeat from Chat. Timestamp: %d"), resp.timestamp);
+                // Only now consider the connection established and start heartbeat
+                if (!ChatHeartbeat.TimerHandle.IsValid()) {
+                    StartHeartbeatForSocket(TEXT("Chat"));
+                }
             }
             break;
         }

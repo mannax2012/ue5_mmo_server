@@ -25,20 +25,31 @@ class ChatServer : public BaseServer {
 public:
     ChatServer() : BaseServer("chat") {}
 
-    void handlePacket(const PacketHeader& header, const std::vector<uint8_t>& data, intptr_t clientSock) override {
+    void handlePacket(const PacketHeader& header, const std::vector<uint8_t>& data, intptr_t clientSock, const sockaddr_in& clientAddr) override {
+        std::string endpointKey = EndpointToString(clientAddr);
+        auto& session = sessionMap[endpointKey];
+        session.clientSock = clientSock;
         switch (header.packetId) {
             case PACKET_C_CHAT_MESSAGE: {
                 C_ChatMessage req;
                 if (data.size() < sizeof(C_ChatMessage)) return;
                 std::memcpy(&req, data.data(), sizeof(C_ChatMessage));
-                LOG_DEBUG(std::string("Received C_ChatMessage from socket ") + std::to_string(clientSock));
+                LOG_DEBUG(std::string("Received C_ChatMessage from endpoint ") + endpointKey);
                 // TODO: Handle chat message logic
                 break;
             }
             default:
-                LOG_DEBUG(std::string("Unknown or unhandled packet: ") + std::to_string(header.packetId) + " from socket " + std::to_string(clientSock));
+                LOG_DEBUG(std::string("Unknown or unhandled packet: ") + std::to_string(header.packetId) + " from endpoint " + endpointKey);
                 break;
         }
+    }
+    void onClientDisconnected(intptr_t clientSock, const sockaddr_in& clientAddr) override {
+        std::string endpointKey = EndpointToString(clientAddr);
+        auto it = sessionMap.find(endpointKey);
+        if (it != sessionMap.end()) {
+            // Any chat-specific cleanup can go here
+        }
+        BaseServer::onClientDisconnected(clientSock, clientAddr);
     }
 };
 

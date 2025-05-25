@@ -8,6 +8,9 @@
 #include <sstream> // NEW: Include sstream for std::ostringstream
 #include <nlohmann/json.hpp>
 #include <cstring> // NEW: Include cstring for std::memset
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <string>
 
 using nlohmann::json;
 
@@ -53,21 +56,28 @@ int BaseServer::run(int argc, char** argv) {
     PrintMySQLDiagnostics(); // Print MySQL diagnostics
     // Register connection/disconnection handlers
     server->setConnectionHandler(
-        [this](intptr_t clientSock) {
+        [this](intptr_t clientSock, const sockaddr_in& clientAddr) {
+            std::string endpointKey = EndpointToString(clientAddr);
             SessionInfo info;
             info.connected = true;
             info.lastHeartbeat = std::chrono::steady_clock::now();
-            sessionMap[clientSock] = info;
-            onClientConnected(clientSock);
+            info.clientAddr = clientAddr; // Store sockaddr_in for this session
+            info.clientSock = clientSock; // Store the last known clientSock
+            sessionMap[endpointKey] = info;
+            onClientConnected(clientSock, clientAddr);
             num_sessions = (int)sessionMap.size();
-            LOG_INFO(std::string("Client connected: fd=") + std::to_string(clientSock));
+            LOG_INFO(std::string("Client connected: ") + endpointKey);
         },
-        [this](intptr_t clientSock) {
-            onClientDisconnected(clientSock);
+        [this](intptr_t clientSock, const sockaddr_in& clientAddr) {
+            std::string endpointKey = EndpointToString(clientAddr);
+            onClientDisconnected(clientSock, clientAddr);
+            sessionMap.erase(endpointKey);
+            num_sessions = (int)sessionMap.size();
+            LOG_INFO(std::string("Client disconnected: ") + endpointKey);
         }
     );
     // Always set the packet handler to decrypt/decompress before dispatch
-    server->setPacketHandler([this](const std::vector<uint8_t>& d, intptr_t clientSock) {
+    server->setPacketHandler([this](const std::vector<uint8_t>& d, intptr_t clientSock, const sockaddr_in& clientAddr) {
         // No connection logic here, only packet handling
         // Log incoming encrypted/compressed packet
         {
@@ -103,17 +113,15 @@ int BaseServer::run(int argc, char** argv) {
             LOG_ERROR(std::string("Packet too small from fd=") + std::to_string(clientSock) + ". Dropping packet.");
             return;
         }
-        //Unpack the packet header
         PacketHeader header;
         std::memcpy(&header, plain.data(), sizeof(PacketHeader));
         const char* packetName = PacketTypeToString(header.packetId);
-        LOG_DEBUG("Received packet from fd=" + std::to_string(clientSock) + ", packetId=" + std::to_string(header.packetId) + " (" + packetName + "), size=" + std::to_string(plain.size()));
-        // Check for heartbeat packet
+        LOG_DEBUG("Received packet from endpoint=" + EndpointToString(clientAddr) + ", fd=" + std::to_string(clientSock) + ", packetId=" + std::to_string(header.packetId) + " (" + packetName + "), size=" + std::to_string(plain.size()));
         if (header.packetId == PACKET_C_HEARTBEAT) {
-            handleHeartbeatPacket(plain, clientSock);
+            handleHeartbeatPacket(plain, clientSock, clientAddr);
             return;
         }
-        handlePacket(header,plain, clientSock);
+        handlePacket(header, plain, clientSock, clientAddr);
     });
     mainLoop();
     LOG_DEBUG("mainLoop() is returning.");
@@ -204,17 +212,16 @@ void BaseServer::connectRedisWithRetry() {
     }
 }
 
-void BaseServer::handleHeartbeatPacket(const std::vector<uint8_t>& data, intptr_t clientSock) {
+void BaseServer::handleHeartbeatPacket(const std::vector<uint8_t>& data, intptr_t clientSock, const sockaddr_in& clientAddr) {
     if (data.size() < sizeof(C_Heartbeat)) return;
     const C_Heartbeat* pkt = reinterpret_cast<const C_Heartbeat*>(data.data());
-    // Update last heartbeat time in sessionMap
-    auto it = sessionMap.find(clientSock);
+    std::string endpointKey = EndpointToString(clientAddr);
+    auto it = sessionMap.find(endpointKey);
     if (it != sessionMap.end()) {
         if(!it->second.sessionKey.empty()) {
-           LOG_DEBUG("Received heartbeat from client fd=" + std::to_string(clientSock) + ", sessionKey=" + it->second.sessionKey);
-           redis.expire("session_" + it->second.sessionKey, HEARTBEAT_TIMEOUT_SEC + 1); // Update Redis session expiration
+           LOG_DEBUG("Received heartbeat from client " + endpointKey + ", sessionKey=" + it->second.sessionKey);
+           redis.expire("session_" + it->second.sessionKey, HEARTBEAT_TIMEOUT_SEC + 1);
            it->second.lastHeartbeat = std::chrono::steady_clock::now();
-            // Respond with S_Heartbeat
             S_Heartbeat resp;
             std::memset(&resp, 0, sizeof(resp));
             resp.header.packetId = PACKET_S_HEARTBEAT;
@@ -222,21 +229,25 @@ void BaseServer::handleHeartbeatPacket(const std::vector<uint8_t>& data, intptr_
             sendToClient(&resp, sizeof(resp), clientSock);
         }
     }
-    
 }
 
 void BaseServer::checkHeartbeatTimeouts() {
     auto now = std::chrono::steady_clock::now();
-    std::vector<intptr_t> toDisconnect;
+    std::vector<std::string> toDisconnect;
     for (const auto& kv : sessionMap) {
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - kv.second.lastHeartbeat).count();
         if (elapsed > HEARTBEAT_TIMEOUT_SEC) {
             toDisconnect.push_back(kv.first);
         }
     }
-    for (intptr_t sock : toDisconnect) {
-        LOG_ERROR("Heartbeat timeout for client fd=" + std::to_string(sock) + ". Disconnecting.");
-        if (server) server->disconnect(sock); // Close the socket
+    for (const std::string& endpointKey : toDisconnect) {
+        LOG_ERROR("Heartbeat timeout for client " + endpointKey + ". Disconnecting.");
+        // Use the stored sockaddr_in and clientSock from the session info
+        auto it = sessionMap.find(endpointKey);
+        if (it != sessionMap.end()) {
+            onClientDisconnected(it->second.clientSock, it->second.clientAddr);
+            // Do NOT erase here; onClientDisconnected handles erasure
+        }
     }
 }
 
@@ -254,17 +265,6 @@ void BaseServer::mainLoop() {
         // ...game/server logic per tick could go here...
         tick++;
         
-        // Remove disconnected clients
-        std::vector<intptr_t> disconnected;
-        for (auto it = sessionMap.begin(); it != sessionMap.end(); ) {
-            // If the client socket is no longer valid, mark for removal (TODO: improve detection)
-            // For now, rely on SocketServerImpl to erase on disconnect
-            ++it;
-        }
-        for (intptr_t sock : disconnected) {
-            sessionMap.erase(sock);
-            onClientDisconnected(sock);
-        }
         
         num_sessions = (int)sessionMap.size();
         checkHeartbeatTimeouts();
@@ -278,7 +278,7 @@ void BaseServer::mainLoop() {
         auto tickEnd = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(tickEnd - tickStart);
         if (elapsed < tickDuration) {
-            LOG_DEBUG("Tick " + std::to_string(tick) + " took " + std::to_string(elapsed.count()) + "ms, sleeping for " + std::to_string((tickDuration - elapsed).count()) + "ms.");
+           // LOG_DEBUG_EXT("Tick " + std::to_string(tick) + " took " + std::to_string(elapsed.count()) + "ms, sleeping for " + std::to_string((tickDuration - elapsed).count()) + "ms.");
             std::this_thread::sleep_for(tickDuration - elapsed);
         }
     }
@@ -346,7 +346,7 @@ void BaseServer::sendToClient(const void* packet, size_t size, intptr_t clientSo
     server->send(out, clientSock);
 }
 
-void BaseServer::onClientConnected(intptr_t clientSock) {
+void BaseServer::onClientConnected(intptr_t clientSock, const sockaddr_in& clientAddr) {
     // Send S_Heartbeat immediately on connection
     S_Heartbeat resp;
     std::memset(&resp, 0, sizeof(resp));
@@ -355,10 +355,15 @@ void BaseServer::onClientConnected(intptr_t clientSock) {
     sendToClient(&resp, sizeof(resp), clientSock);
 }
 
-void BaseServer::onClientDisconnected(intptr_t clientSock) {
+void BaseServer::onClientDisconnected(intptr_t clientSock, const sockaddr_in& clientAddr) {
     LOG_DEBUG("Client disconnected: fd=" + std::to_string(clientSock));
-    sessionMap.erase(clientSock);
+    std::string endpointKey = EndpointToString(clientAddr);
+    sessionMap.erase(endpointKey);
     num_sessions = (int)sessionMap.size();
+    //we need to log the actual session keys
+    LOG_INFO("Client disconnected: " + endpointKey + ", remaining sessions: " + std::to_string(num_sessions));
+    
+
 }
 
 void BaseServer::PrintMySQLDiagnostics() {

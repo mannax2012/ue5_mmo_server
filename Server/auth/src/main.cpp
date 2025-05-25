@@ -14,17 +14,26 @@
 #include <random>
 #include <map>
 #include <boost/asio.hpp>
+#include <string>
+#include <sstream>
 
 class AuthServer : public BaseServer {
 public:
+    // Change sessionMap to use std::string (IP:port) as key
+    std::unordered_map<std::string, SessionInfo> sessionMap;
+
     AuthServer() : BaseServer("auth") {}
 
-    void handlePacket(const PacketHeader& header, const std::vector<uint8_t>& data, intptr_t clientSock) override {
-        // Use BaseServer's sessionMap for session tracking
-        auto& session = sessionMap[clientSock];
+    void handlePacket(const PacketHeader& header, const std::vector<uint8_t>& data, intptr_t clientSock, const sockaddr_in& clientAddr) override {
+        std::string endpointKey = EndpointToString(clientAddr);
+        auto& session = sessionMap[endpointKey];
+        session.clientSock = clientSock; // Update clientSock on packet receipt
+
+        // Revert: Do not attempt session recovery by sessionKey in packet. Only use endpoint for session tracking.
 
         //CHECK FOR LOGIN
-        if(session.playerId == -1 && header.packetId != PACKET_C_LOGIN_REQUEST) {
+        if(session.playerId == -1 && header.packetId != PACKET_C_LOGIN_REQUEST && header.packetId != PACKET_C_CONNECT_REQUEST) {
+            // If not logged in, only allow login or connect requests
             LOG_DEBUG("Session not logged in, dropping packet.");
             return;
         }
@@ -76,21 +85,20 @@ public:
                     sendToClient(&resp, sizeof(resp), clientSock);
                     break;
                 }
-                // Success: create session
-                std::string sessionKey = GenerateSessionKey();
+                // Success: use the sessionKey generated in onClientConnected
+                std::string sessionKey = session.sessionKey;
                 std::string redisSessionKey = "session_" + sessionKey;
                 std::vector<std::pair<std::string, std::string>> sessionFields = {
                     {"playerId", std::to_string(playerId)},
                     {"username", username},
                     {"charId", std::to_string(session.charId)},
                     {"sessionKey", sessionKey},
-                     {"fd", std::to_string(clientSock)}
+                    {"fd", std::to_string(clientSock)}
                 };
                 redis.hset(redisSessionKey, sessionFields);
                 redis.expire(redisSessionKey, HEARTBEAT_TIMEOUT_SEC + 2); // 1 hour expiration
                 session.playerId = playerId;
                 session.username = username;
-                session.sessionKey = sessionKey;
                 S_LoginResponse resp{};
                 resp.header.packetId = PACKET_S_LOGIN_RESPONSE;
                 resp.resultCode = 0;
@@ -344,12 +352,27 @@ public:
                 }
                 break;
             }
+            case PACKET_C_CONNECT_REQUEST: {
+                // UDP handshake: treat as connection event, start heartbeat
+                LOG_DEBUG("Received C_ConnectRequest from fd=" + std::to_string(clientSock));
+                // Directly call the onConnect event handler in the socket server for this client
+                if (server && server->onConnect) server->onConnect(clientSock, clientAddr);
+                break;
+            }
             default:
                 LOG_DEBUG("Unknown or unhandled packet: " + std::to_string(header.packetId) + " from fd=" + std::to_string(clientSock));
                 break;
         }
     }
+    void onClientConnected(intptr_t clientSock, const sockaddr_in& clientAddr) {
+        std::string endpointKey = EndpointToString(clientAddr);
+        auto& session = sessionMap[endpointKey];
+        session.sessionKey = GenerateSessionKey();
+        session.connected = true;
+        session.clientAddr = clientAddr; // Store sockaddr_in for this session
+        BaseServer::onClientConnected(clientSock, clientAddr);
 
+    }
     std::string GenerateSessionKey() {
         static std::random_device rd;
         static std::mt19937 gen(rd());

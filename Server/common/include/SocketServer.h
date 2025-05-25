@@ -2,9 +2,10 @@
 #include <vector>
 #include <cstdint>
 #include <functional>
+#include <netinet/in.h>
 
-using SocketPacketHandler = std::function<void(const std::vector<uint8_t>&, intptr_t)>;
-using SocketConnectionHandler = std::function<void(intptr_t)>;
+using SocketPacketHandler = std::function<void(const std::vector<uint8_t>&, intptr_t, const sockaddr_in&)>;
+using SocketConnectionHandler = std::function<void(intptr_t, const sockaddr_in&)>;
 
 class SocketServer {
 public:
@@ -17,6 +18,9 @@ public:
     virtual void setConnectionHandler(SocketConnectionHandler onConnect, SocketConnectionHandler onDisconnect) = 0;
     // Add disconnect method
     virtual void disconnect(intptr_t clientSock) = 0;
+
+    SocketConnectionHandler onConnect;
+    SocketConnectionHandler onDisconnect;
 };
 
 SocketServer* CreateSocketServer();
