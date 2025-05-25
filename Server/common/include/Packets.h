@@ -30,10 +30,20 @@ enum PacketType : int16_t {
     PACKET_S_MOVE = 2001,
     PACKET_C_COMBAT_ACTION = 2010,
     PACKET_S_COMBAT_RESULT = 2011,
-    PACKET_S_NPC_SPAWN = 2020,
     PACKET_S_ITEM_LIST = 2030,
     PACKET_C_SHOP_BUY = 2040,
     PACKET_S_SHOP_BUY_RESULT = 2041,
+    // Entity Spawn/Despawn Packets (2100+)
+    PACKET_S_PLAYER_SPAWN = 2102,
+    PACKET_S_PLAYER_DESPAWN = 2103,
+    PACKET_S_MOB_SPAWN = 2104,
+    PACKET_S_MOB_DESPAWN = 2105,
+    PACKET_S_NPC_SPAWN = 2106,
+    PACKET_S_NPC_DESPAWN = 2107,
+    PACKET_S_ITEM_SPAWN = 2108,
+    PACKET_S_ITEM_DESPAWN = 2109,
+
+
 
     // Chat Packets (5000+)
     PACKET_C_CHAT_MESSAGE = 5000,
@@ -62,7 +72,6 @@ inline const char* PacketTypeToString(int16_t packetId) {
         case PACKET_S_MOVE: return "PACKET_S_MOVE";
         case PACKET_C_COMBAT_ACTION: return "PACKET_C_COMBAT_ACTION";
         case PACKET_S_COMBAT_RESULT: return "PACKET_S_COMBAT_RESULT";
-        case PACKET_S_NPC_SPAWN: return "PACKET_S_NPC_SPAWN";
         case PACKET_S_ITEM_LIST: return "PACKET_S_ITEM_LIST";
         case PACKET_C_SHOP_BUY: return "PACKET_C_SHOP_BUY";
         case PACKET_S_SHOP_BUY_RESULT: return "PACKET_S_SHOP_BUY_RESULT";
@@ -70,6 +79,14 @@ inline const char* PacketTypeToString(int16_t packetId) {
         case PACKET_S_CHAT_MESSAGE: return "PACKET_S_CHAT_MESSAGE";
         case PACKET_C_CONNECT_REQUEST: return "PACKET_C_CONNECT_REQUEST";
         case PACKET_S_CONNECT_RESULT: return "PACKET_S_CONNECT_RESULT";
+        case PACKET_S_PLAYER_SPAWN: return "PACKET_S_PLAYER_SPAWN";
+        case PACKET_S_PLAYER_DESPAWN: return "PACKET_S_PLAYER_DESPAWN";
+        case PACKET_S_MOB_SPAWN: return "PACKET_S_MOB_SPAWN";
+        case PACKET_S_MOB_DESPAWN: return "PACKET_S_MOB_DESPAWN";
+        case PACKET_S_NPC_SPAWN: return "PACKET_S_NPC_SPAWN";
+        case PACKET_S_NPC_DESPAWN: return "PACKET_S_NPC_DESPAWN";
+        case PACKET_S_ITEM_SPAWN: return "PACKET_S_ITEM_SPAWN";
+        case PACKET_S_ITEM_DESPAWN: return "PACKET_S_ITEM_DESPAWN";
         default: return "UNKNOWN_PACKET";
     }
 }
@@ -171,10 +188,13 @@ struct C_Move {
 struct S_Move {
     static constexpr PacketType PACKET_ID = PACKET_S_MOVE;
     PacketHeader header{PACKET_ID};
-    int32_t charId;
+    int64_t entityId; // Was charId, now supports all entity types
+    int8_t entityType; // ENetworkedEntityType (Player, Mob, NPC, Item)
+    int32_t shardId; // Add shardId for MMO sharding support
     float x;
     float y;
     float z;
+    float yaw; // Add yaw for rotation (optional, but common in MMO movement)
 };
 
 struct C_CombatAction {
@@ -193,37 +213,65 @@ struct S_CombatResult {
     int8_t resultType; // 0 = hit, 1 = miss, 2 = crit
 };
 
+// --- Entity Spawn/Despawn Packets ---
+struct S_PlayerSpawn {
+    static constexpr PacketType PACKET_ID = PACKET_S_PLAYER_SPAWN;
+    PacketHeader header{PACKET_ID};
+    int64_t entityId;
+    int32_t shardId;
+    float x, y, z;
+    float yaw;
+    char name[32];
+    int16_t classId;
+    int32_t level;
+};
+struct S_PlayerDespawn {
+    static constexpr PacketType PACKET_ID = PACKET_S_PLAYER_DESPAWN;
+    PacketHeader header{PACKET_ID};
+    int64_t entityId;
+};
+struct S_MobSpawn {
+    static constexpr PacketType PACKET_ID = PACKET_S_MOB_SPAWN;
+    PacketHeader header{PACKET_ID};
+    int64_t entityId;
+    int32_t shardId;
+    float x, y, z;
+    float yaw;
+    int32_t mobTypeId;
+    int32_t level;
+};
+struct S_MobDespawn {
+    static constexpr PacketType PACKET_ID = PACKET_S_MOB_DESPAWN;
+    PacketHeader header{PACKET_ID};
+    int64_t entityId;
+};
 struct S_NPCSpawn {
     static constexpr PacketType PACKET_ID = PACKET_S_NPC_SPAWN;
     PacketHeader header{PACKET_ID};
-    int32_t npcId;
-    int32_t x;
-    int32_t y;
-    int32_t z;
+    int64_t entityId;
+    int32_t shardId;
+    float x, y, z;
+    float yaw;
+    int32_t npcTypeId;
 };
-
-struct S_ItemList {
-    static constexpr PacketType PACKET_ID = PACKET_S_ITEM_LIST;
+struct S_NPCDespawn {
+    static constexpr PacketType PACKET_ID = PACKET_S_NPC_DESPAWN;
     PacketHeader header{PACKET_ID};
-    int16_t itemCount;
-    int32_t itemIds[64];
-    int16_t itemCounts[64];
+    int64_t entityId;
 };
-
-struct C_ShopBuy {
-    static constexpr PacketType PACKET_ID = PACKET_C_SHOP_BUY;
+struct S_ItemSpawn {
+    static constexpr PacketType PACKET_ID = PACKET_S_ITEM_SPAWN;
     PacketHeader header{PACKET_ID};
-    int32_t shopId;
+    int64_t entityId;
+    int32_t shardId;
+    float x, y, z;
     int32_t itemId;
-    int16_t count;
+    int32_t count;
 };
-
-struct S_ShopBuyResult {
-    static constexpr PacketType PACKET_ID = PACKET_S_SHOP_BUY_RESULT;
+struct S_ItemDespawn {
+    static constexpr PacketType PACKET_ID = PACKET_S_ITEM_DESPAWN;
     PacketHeader header{PACKET_ID};
-    int8_t resultCode;
-    int32_t itemId;
-    int16_t count;
+    int64_t entityId;
 };
 
 // Chat Packets
@@ -265,7 +313,7 @@ struct S_CharListResult {
     static constexpr PacketType PACKET_ID = PACKET_S_CHAR_LIST_RESULT;
     PacketHeader header{PACKET_ID};
     int8_t charCount;
-    CharListEntry entries[8]; // Max 8 characters per account, adjust as needed
+    CharListEntry entries[];
 };
 
 // Heartbeat/Connection

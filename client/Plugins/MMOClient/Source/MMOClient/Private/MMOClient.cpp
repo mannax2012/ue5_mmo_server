@@ -567,19 +567,25 @@ void UMMOClient::HandleAuthPacket(const TArray<uint8>& Data)
             break;
         }
         case PACKET_S_CHAR_LIST_RESULT: {
-            S_CharListResult resp;
-            if (DeserializeStruct(Data, resp)) {
-                UE_LOG(LogMMOClient, Log, TEXT("Character list received. Count: %d"), resp.CharCount);
-                TArray<FCharListEntry> CharList;
-                for (int32 i = 0; i < resp.CharCount; ++i) {
-                    FCharListEntry Entry;
-                    Entry.CharId = resp.Entries[i].CharId;
-                    Entry.Name = UTF8_TO_TCHAR(resp.Entries[i].Name);
-                    Entry.ClassId = resp.Entries[i].ClassId;
-                    CharList.Add(Entry);
-                }
-                OnCharListResult.Broadcast(CharList, resp.CharCount);
+            if (Data.Num() < sizeof(S_CharListResult)) break;
+            const S_CharListResult* resp = reinterpret_cast<const S_CharListResult*>(Data.GetData());
+            int32 CharCount = resp->CharCount;
+            int32 expectedSize = sizeof(S_CharListResult) + CharCount * sizeof(CharListEntry);
+            if (Data.Num() < expectedSize) {
+                UE_LOG(LogMMOClient, Error, TEXT("S_CharListResult: Packet too small for %d entries (got %d bytes, expected %d)"), CharCount, Data.Num(), expectedSize);
+                break;
             }
+            UE_LOG(LogMMOClient, Log, TEXT("Character list received. Count: %d"), CharCount);
+            TArray<FCharListEntry> CharList;
+            const CharListEntry* entries = reinterpret_cast<const CharListEntry*>(Data.GetData() + sizeof(S_CharListResult));
+            for (int32 i = 0; i < CharCount; ++i) {
+                FCharListEntry Entry;
+                Entry.CharId = entries[i].CharId;
+                Entry.Name = UTF8_TO_TCHAR(entries[i].Name);
+                Entry.ClassId = entries[i].ClassId;
+                CharList.Add(Entry);
+            }
+            OnCharListResult.Broadcast(CharList, CharCount);
             break;
         }
         case PACKET_S_HEARTBEAT: {
@@ -616,6 +622,16 @@ void UMMOClient::HandleGamePacket(const TArray<uint8>& Data)
         case PACKET_S_MOVE: {
             S_Move move;
             if (DeserializeStruct(Data, move)) {
+                UE_LOG(LogMMOClient, Log, TEXT("Move packet received. EntityId: %d, Location: (%f, %f, %f)"), move.entityId, move.x, move.y, move.z);
+                UGameInstance* GameInstance = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
+                UMMOGameInstance* MMOGameInstance = Cast<UMMOGameInstance>(GameInstance);
+                if(MMOGameInstance && MMOGameInstance->NetworkedEntityManager) {
+                    MMOGameInstance->NetworkedEntityManager->HandleEntityMovePacket(move);
+                } else if (!MMOGameInstance) {
+                    UE_LOG(LogMMOClient, Error, TEXT("Failed to cast GameInstance to MMOGameInstance!"));
+                } else {
+                    UE_LOG(LogMMOClient, Error, TEXT("NetworkedEntityManager is null!"));
+                }
                 FVector ConfirmedLocation(move.x, move.y, move.z);
                 OnMoveResponse.Broadcast(ConfirmedLocation);
             }
@@ -637,6 +653,22 @@ void UMMOClient::HandleGamePacket(const TArray<uint8>& Data)
                     }
                 } else {
                     UE_LOG(LogMMOClient, Warning, TEXT("Game server connection failed."));
+                }
+            }
+            break;
+        }
+        case PACKET_S_PLAYER_SPAWN: {
+            S_PlayerSpawn spawn;
+            if (DeserializeStruct(Data, spawn)) {
+                UE_LOG(LogMMOClient, Log, TEXT("Player spawn packet received. EntityId: %d, Location: (%f, %f, %f)"), spawn.entityId, spawn.x, spawn.y, spawn.z);
+                UGameInstance* GameInstance = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
+                UMMOGameInstance* MMOGameInstance = Cast<UMMOGameInstance>(GameInstance);
+                if(MMOGameInstance && MMOGameInstance->NetworkedEntityManager) {
+                    MMOGameInstance->NetworkedEntityManager->HandlePlayerSpawnPacket(spawn);
+                } else if (!MMOGameInstance) {
+                    UE_LOG(LogMMOClient, Error, TEXT("Failed to cast GameInstance to MMOGameInstance!"));
+                } else {
+                    UE_LOG(LogMMOClient, Error, TEXT("NetworkedEntityManager is null!"));
                 }
             }
             break;

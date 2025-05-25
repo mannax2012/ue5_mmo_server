@@ -112,3 +112,5 @@ void UMMOGameInstance::SendMoveRequest(const FVector& NewLocation)
         MMOClient->SendToGame(TArray<uint8>((uint8*)&MovePacket, sizeof(MovePacket)));
     }
 }
+
+// No additional implementation needed for SetNetworkedEntityManager

@@ -20,7 +20,9 @@
 
 class GameServer : public BaseServer {
   public:
-    GameServer() : BaseServer("game") {}    
+    GameServer() : BaseServer("game") {
+        zoneManager.SetServer(this);
+    }    
     MobManager mobManager;
     ZoneManager zoneManager;
  
@@ -73,15 +75,9 @@ class GameServer : public BaseServer {
                 if (resp.resultCode == 0) {
                     auto player = std::make_shared<Player>();
                     player->InitFromDB(mysql, session.charId, session.username, session.playerId, &zoneManager);
+                    player->session = &session; // Set direct session pointer
                     zoneManager.AddEntityToZone(player->zoneId, player);
                     session.playerEntity = player;
-                    S_Move resp{};
-                    resp.header.packetId = PACKET_S_MOVE;
-                    resp.charId = player->id;
-                    resp.x = player->x;
-                    resp.y = player->y;
-                    resp.z = player->z;
-                    sendToClient(&resp, sizeof(resp), clientSock);
                 }
                 break;
             }
@@ -94,20 +90,6 @@ class GameServer : public BaseServer {
                 if (player) {
                     player->MoveTo(req.x, req.y, req.z);
                 }
-                break;
-            }
-            case PACKET_C_COMBAT_ACTION: {
-                C_CombatAction req;
-                if (data.size() < sizeof(C_CombatAction)) return;
-                std::memcpy(&req, data.data(), sizeof(C_CombatAction));
-                LOG_DEBUG(std::string("Received C_CombatAction from socket ") + std::to_string(clientSock));
-                break;
-            }
-            case PACKET_C_SHOP_BUY: {
-                C_ShopBuy req;
-                if (data.size() < sizeof(C_ShopBuy)) return;
-                std::memcpy(&req, data.data(), sizeof(C_ShopBuy));
-                LOG_DEBUG(std::string("Received C_ShopBuy from socket ") + std::to_string(clientSock));
                 break;
             }
             default:

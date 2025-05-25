@@ -331,24 +331,35 @@ public:
                     std::string query = "SELECT id, name, class_id FROM characters WHERE account_id=" + std::to_string(session.playerId);
                     std::vector<std::vector<std::string>> result;
                     bool ok = mysql.query(query, result);
-                    S_CharListResult resp{};
-                    resp.header.packetId = PACKET_S_CHAR_LIST_RESULT;
-                    resp.charCount = 0;
+                    int count = static_cast<int>(result.size());
                     if (!ok) {
                         LOG_DEBUG("[MYSQL] error during char list: " + mysql.getLastError());
-                        sendToClient(&resp, sizeof(resp), clientSock);
+                        // Send empty result
+                        size_t respSize = sizeof(S_CharListResult);
+                        auto* respBuf = (S_CharListResult*)std::malloc(respSize);
+                        std::memset(respBuf, 0, respSize);
+                        respBuf->header.packetId = PACKET_S_CHAR_LIST_RESULT;
+                        respBuf->charCount = 0;
+                        sendToClient(respBuf, respSize, clientSock);
+                        std::free(respBuf);
                         break;
                     }
-                    int count = std::min((int)result.size(), 8); // max 8 chars
-                    resp.charCount = static_cast<int8_t>(count);
+                    // Allocate buffer for header + count + all entries
+                    size_t respSize = sizeof(S_CharListResult) + count * sizeof(CharListEntry);
+                    auto* respBuf = (S_CharListResult*)std::malloc(respSize);
+                    std::memset(respBuf, 0, respSize);
+                    respBuf->header.packetId = PACKET_S_CHAR_LIST_RESULT;
+                    respBuf->charCount = static_cast<int8_t>(count);
+                    CharListEntry* entries = reinterpret_cast<CharListEntry*>(reinterpret_cast<uint8_t*>(respBuf) + sizeof(S_CharListResult));
                     for (int i = 0; i < count; ++i) {
-                        resp.entries[i].charId = std::stoi(result[i][0]);
-                        std::memset(resp.entries[i].name, 0, sizeof(resp.entries[i].name));
-                        std::strncpy(resp.entries[i].name, result[i][1].c_str(), sizeof(resp.entries[i].name) - 1);
-                        resp.entries[i].classId = static_cast<int16_t>(std::stoi(result[i][2]));
+                        entries[i].charId = std::stoi(result[i][0]);
+                        std::memset(entries[i].name, 0, sizeof(entries[i].name));
+                        std::strncpy(entries[i].name, result[i][1].c_str(), sizeof(entries[i].name) - 1);
+                        entries[i].classId = static_cast<int16_t>(std::stoi(result[i][2]));
                     }
                     LOG_DEBUG("CharListResult: " + std::to_string(count) + " chars for playerId=" + std::to_string(session.playerId));
-                    sendToClient(&resp, sizeof(resp), clientSock);
+                    sendToClient(respBuf, respSize, clientSock);
+                    std::free(respBuf);
                 }
                 break;
             }

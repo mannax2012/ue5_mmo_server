@@ -1,8 +1,115 @@
 #include "ZoneManager.h"
 #include "Entity.h"
+#include "Player.h"
 int ZoneManager::zoneSize = 100;
 void ZoneManager::AddEntityToZone(int32_t zoneId, std::shared_ptr<Entity> entity) {
-    zoneEntities[zoneId].insert(entity->id);
+    zoneEntities[zoneId][entity->id] = entity;
+    switch (entity->type) {
+        case EntityType::PLAYER:
+            zonePlayers[zoneId][entity->id] = std::static_pointer_cast<Player>(entity);
+            break;
+        case EntityType::MOB:
+            zoneMobs[zoneId][entity->id] = entity;
+            break;
+        case EntityType::NPC:
+            zoneNPCs[zoneId][entity->id] = entity;
+            break;
+        case EntityType::ITEM:
+            zoneItems[zoneId][entity->id] = entity;
+            break;
+        default:
+            break;
+    }
+    // Broadcast spawn packet to all players in the zone for each entity type
+    if (server) {
+        const auto& players = GetPlayersInZone(zoneId);
+        switch (entity->type) {
+            case EntityType::PLAYER: {
+                S_PlayerSpawn spawn{};
+                spawn.header.packetId = PACKET_S_PLAYER_SPAWN;
+                spawn.entityId = entity->id;
+                spawn.shardId = zoneId;
+                spawn.x = entity->x;
+                spawn.y = entity->y;
+                spawn.z = entity->z;
+                spawn.yaw = 0.0f; // TODO: Add rotation if available
+                Player* player = dynamic_cast<Player*>(entity.get());
+                if (player) {
+                    strncpy(spawn.name, player->name.c_str(), sizeof(spawn.name)-1);
+                    spawn.classId = 0; // TODO: Set actual classId
+                    spawn.level = 1;   // TODO: Set actual level
+                } else {
+                    spawn.name[0] = '\0';
+                    spawn.classId = 0;
+                    spawn.level = 1;
+                }
+                for (const auto& pair : players) {
+                    auto& p = pair.second;
+                    if (p && p->session) {
+                        server->sendToClient(&spawn, sizeof(spawn), p->session->clientSock);
+                    }
+                }
+                break;
+            }
+            case EntityType::MOB: {
+                S_MobSpawn spawn{};
+                spawn.header.packetId = PACKET_S_MOB_SPAWN;
+                spawn.entityId = entity->id;
+                spawn.shardId = zoneId;
+                spawn.x = entity->x;
+                spawn.y = entity->y;
+                spawn.z = entity->z;
+                spawn.yaw = 0.0f; // TODO: Add rotation if available
+                spawn.mobTypeId = 0; // TODO: Set actual mob type
+                spawn.level = 1;     // TODO: Set actual level
+                for (const auto& pair : players) {
+                    auto& p = pair.second;
+                    if (p && p->session) {
+                        server->sendToClient(&spawn, sizeof(spawn), p->session->clientSock);
+                    }
+                }
+                break;
+            }
+            case EntityType::NPC: {
+                S_NPCSpawn spawn{};
+                spawn.header.packetId = PACKET_S_NPC_SPAWN;
+                spawn.entityId = entity->id;
+                spawn.shardId = zoneId;
+                spawn.x = entity->x;
+                spawn.y = entity->y;
+                spawn.z = entity->z;
+                spawn.yaw = 0.0f; // TODO: Add rotation if available
+                spawn.npcTypeId = 0; // TODO: Set actual npc type
+                for (const auto& pair : players) {
+                    auto& p = pair.second;
+                    if (p && p->session) {
+                        server->sendToClient(&spawn, sizeof(spawn), p->session->clientSock);
+                    }
+                }
+                break;
+            }
+            case EntityType::ITEM: {
+                S_ItemSpawn spawn{};
+                spawn.header.packetId = PACKET_S_ITEM_SPAWN;
+                spawn.entityId = entity->id;
+                spawn.shardId = zoneId;
+                spawn.x = entity->x;
+                spawn.y = entity->y;
+                spawn.z = entity->z;
+                spawn.itemId = 0; // TODO: Set actual item id
+                spawn.count = 1;  // TODO: Set actual count
+                for (const auto& pair : players) {
+                    auto& p = pair.second;
+                    if (p && p->session) {
+                        server->sendToClient(&spawn, sizeof(spawn), p->session->clientSock);
+                    }
+                }
+                break;
+            }
+            default:
+                break;
+        }
+    }
 }
 
 void ZoneManager::RemoveEntityFromZone(int32_t zoneId, int32_t entityId) {
@@ -13,15 +120,45 @@ void ZoneManager::RemoveEntityFromZone(int32_t zoneId, int32_t entityId) {
             zoneEntities.erase(it);
         }
     }
+    // Remove from type-specific maps
+    auto pit = zonePlayers.find(zoneId);
+    if (pit != zonePlayers.end()) {
+        pit->second.erase(entityId);
+        if (pit->second.empty()) zonePlayers.erase(pit);
+    }
+    auto mit = zoneMobs.find(zoneId);
+    if (mit != zoneMobs.end()) {
+        mit->second.erase(entityId);
+        if (mit->second.empty()) zoneMobs.erase(mit);
+    }
+    auto nit = zoneNPCs.find(zoneId);
+    if (nit != zoneNPCs.end()) {
+        nit->second.erase(entityId);
+        if (nit->second.empty()) zoneNPCs.erase(nit);
+    }
+    auto iit = zoneItems.find(zoneId);
+    if (iit != zoneItems.end()) {
+        iit->second.erase(entityId);
+        if (iit->second.empty()) zoneItems.erase(iit);
+    }
 }
 
-const std::set<int32_t>& ZoneManager::GetEntitiesInZone(int32_t zoneId) const {
-    static const std::set<int32_t> emptySet;
+const std::unordered_map<int32_t, std::shared_ptr<Entity>>& ZoneManager::GetEntitiesInZone(int32_t zoneId) const {
+    static const std::unordered_map<int32_t, std::shared_ptr<Entity>> emptyMap;
     auto it = zoneEntities.find(zoneId);
     if (it != zoneEntities.end()) {
         return it->second;
     }
-    return emptySet;
+    return emptyMap;
+}
+
+const std::unordered_map<int32_t, std::shared_ptr<Player>>& ZoneManager::GetPlayersInZone(int32_t zoneId) const {
+    static const std::unordered_map<int32_t, std::shared_ptr<Player>> emptyMap;
+    auto it = zonePlayers.find(zoneId);
+    if (it != zonePlayers.end()) {
+        return it->second;
+    }
+    return emptyMap;
 }
 
 // Get nearby zones based on the entity's position

@@ -37,6 +37,12 @@ public:
     UFUNCTION(BlueprintCallable, Category = "MMO|Movement")
     void SendMoveRequest(const FVector& NewLocation);
 
+    UPROPERTY(BlueprintReadOnly)
+    class UNetworkedEntityManager* NetworkedEntityManager = nullptr;
+
+    UFUNCTION(BlueprintCallable, Category="MMO|Network")
+    void SetNetworkedEntityManager(UNetworkedEntityManager* Manager) { NetworkedEntityManager = Manager; }
+
     virtual void Init() override;
     virtual void Shutdown() override;
 };

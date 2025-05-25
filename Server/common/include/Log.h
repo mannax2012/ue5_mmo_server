@@ -6,12 +6,12 @@
 
 // Log levels
 enum class LogLevel {
-    DEBUG_EXTENDED = 0,
-    DEBUG = 1,
-    INFO = 2,
-    WARNING = 3,
-    ERROR = 4,
-    NONE = 5
+    DEBUG_EXTENDED,
+    DEBUG,
+    INFO,
+    WARNING,
+    ERROR,
+    NONE
 };
 
 extern LogLevel GLOBAL_LOG_LEVEL;

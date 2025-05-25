@@ -2,10 +2,11 @@
 #include <cstdint>
 #include <memory>
 
+enum EntityType { PLAYER, NPC, MOB, ITEM };
+
 // Base class for all entities in the world
 class Entity : public std::enable_shared_from_this<Entity> {
 public:
-    enum class EntityType { PLAYER, NPC, MOB };
     int32_t id;
     float x, y, z;
     EntityType type;

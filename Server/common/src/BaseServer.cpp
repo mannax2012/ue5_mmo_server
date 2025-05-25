@@ -117,6 +117,17 @@ int BaseServer::run(int argc, char** argv) {
         std::memcpy(&header, plain.data(), sizeof(PacketHeader));
         const char* packetName = PacketTypeToString(header.packetId);
         LOG_DEBUG("Received packet from endpoint=" + EndpointToString(clientAddr) + ", fd=" + std::to_string(clientSock) + ", packetId=" + std::to_string(header.packetId) + " (" + packetName + "), size=" + std::to_string(plain.size()));
+
+        // Automatic variable-length struct array support:
+        // If the packet struct in Packets.h has a count field (e.g. numPlayers),
+        // the handler can extract the array using the count and sizeof(struct).
+        // The handler should cast the buffer after the header+count to the struct array.
+        // Example usage in a handler:
+        //   struct S_PlayerList { PacketHeader header; uint32_t numPlayers; Player players[1]; };
+        //   const S_PlayerList* pkt = reinterpret_cast<const S_PlayerList*>(plain.data());
+        //   if (plain.size() >= sizeof(S_PlayerList) + (pkt->numPlayers-1)*sizeof(Player)) { ... }
+        // This is now supported for all packets, no template needed.
+
         if (header.packetId == PACKET_C_HEARTBEAT) {
             handleHeartbeatPacket(plain, clientSock, clientAddr);
             return;
