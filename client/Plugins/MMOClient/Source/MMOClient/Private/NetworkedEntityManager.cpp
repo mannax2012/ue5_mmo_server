@@ -1,6 +1,7 @@
 // NetworkedEntityManager.cpp
 // (c) 2025 MMOClient
 #include "NetworkedEntityManager.h"
+#include "MMOGameInstance.h" // Fix for UMMOGameInstance undefined
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
 #include "Kismet/GameplayStatics.h"

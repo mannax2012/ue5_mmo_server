@@ -49,7 +49,7 @@ public:
     void sendToClient(const void* packet, size_t size, intptr_t clientSock);
 
     // Heartbeat constants
-    static constexpr int HEARTBEAT_INTERVAL_SEC = 5;
+    static constexpr int HEARTBEAT_INTERVAL_SEC = 2;
     static constexpr int HEARTBEAT_TIMEOUT_SEC = 12;
 
     // Provide public accessors for shutdown logic

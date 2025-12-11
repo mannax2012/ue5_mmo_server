@@ -13,6 +13,6 @@ public:
     MobManager mobManager;
     ZoneManager zoneManager;
     void handlePacket(const PacketHeader& header, const std::vector<uint8_t>& data, intptr_t clientSock, const sockaddr_in& clientAddr);
-    bool loadConfig(int argc, char** argv) override;
+    bool loadConfig(int argc, char** argv);
     void onClientDisconnected(intptr_t clientSock, const sockaddr_in& clientAddr);
 };

@@ -1,5 +1,11 @@
 #include "MMOGameInstance.h"
+#include "Packets.h"
 #include "MMOClient.h"
+#if PLATFORM_WINDOWS
+extern int32 GPlayInEditorID;
+#endif
+
+
 
 void UMMOGameInstance::Init()
 {
@@ -113,7 +119,6 @@ void UMMOGameInstance::SendMoveRequest(const FVector& NewLocation)
     if (MMOClient)
     {
         // Serialize and send move request
-
         C_Move MovePacket;
         memset(&MovePacket, 0, sizeof(MovePacket)); // Always zero-initialize!
         MovePacket.header.packetId = PACKET_C_MOVE;
@@ -128,11 +133,15 @@ void UMMOGameInstance::SendMoveRequest(const FVector& NewLocation)
 int32 UMMOGameInstance::GetPIEClientIndex() const
 {
 #if WITH_EDITOR
-    // GPlayInEditorID is set by Unreal for PIE clients (0 for first, 1 for second, ...)
-    return GPlayInEditorID;
-#else
-    return -1;
+    if (GEngine)
+    {
+        if (const FWorldContext* PIEContext = GEngine->GetWorldContextFromWorld(GetWorld()))
+        {
+            return PIEContext->PIEInstance;
+        }
+    }
 #endif
+    return -1;
 }
 
 // No additional implementation needed for SetNetworkedEntityManager

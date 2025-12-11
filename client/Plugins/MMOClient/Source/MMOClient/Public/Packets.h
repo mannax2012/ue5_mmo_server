@@ -1,3 +1,16 @@
+#include <Containers/Array.h>
+
+// --- Serialization helpers ---
+template<typename T>
+void SerializeStruct(const T& packet, TArray<uint8>& out)
+{
+    out.SetNumUninitialized(sizeof(T));
+    FMemory::Memcpy(out.GetData(), &packet, sizeof(T));
+    /* Optional: Logging, requires Log category and PacketTypeToString
+    const uint8* headerPtr = reinterpret_cast<const uint8*>(&packet.header);
+    UE_LOG(LogMMOClient, Log, TEXT("[OUT] packetId: %d | Type: %hs"), packet.header.packetId,  PacketTypeToString(packet.header.packetId));
+    */
+}
 #pragma once
 #include <cstdint>
 #include <vector>

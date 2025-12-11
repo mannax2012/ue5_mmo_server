@@ -156,7 +156,7 @@ private:
     void StopHeartbeat();
     void SendHeartbeat();
 
-    constexpr static float HEARTBEAT_INTERVAL = 5.0f;
+    constexpr static float HEARTBEAT_INTERVAL = 2.0f;
     constexpr static float HEARTBEAT_TIMEOUT = 12.0f;
 
     

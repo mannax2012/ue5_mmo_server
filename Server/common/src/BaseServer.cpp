@@ -80,6 +80,14 @@ int BaseServer::run(int argc, char** argv) {
             sessionMap[endpointKey] = info;
             onClientConnected(clientSock, clientAddr);
             num_sessions = (int)sessionMap.size();
+            for (const auto& [key, sess] : sessionMap) {
+                LOG_DEBUG_EXT("  Session[" + key + "]: playerId=" + std::to_string(sess.playerId) + 
+                     ", charId=" + std::to_string(sess.charId) + 
+                     ", sessionKey=" + sess.sessionKey + 
+                     ", username=" + sess.username + 
+                     ", connected=" + (sess.connected ? "true" : "false") +
+                     ", clientSock=" + std::to_string(sess.clientSock));
+            }
             LOG_INFO(std::string("Client connected: ") + endpointKey);
         },
         [this](intptr_t clientSock, const sockaddr_in& clientAddr) {
@@ -140,7 +148,6 @@ int BaseServer::run(int argc, char** argv) {
         //   struct S_PlayerList { PacketHeader header; uint32_t numPlayers; Player players[1]; };
         //   const S_PlayerList* pkt = reinterpret_cast<const S_PlayerList*>(plain.data());
         //   if (plain.size() >= sizeof(S_PlayerList) + (pkt->numPlayers-1)*sizeof(Player)) { ... }
-        // This is now supported for all packets, no template needed.
 
         if (header.packetId == PACKET_C_HEARTBEAT) {
             handleHeartbeatPacket(plain, clientSock, clientAddr);
@@ -244,15 +251,24 @@ void BaseServer::handleHeartbeatPacket(const std::vector<uint8_t>& data, intptr_
     auto it = sessionMap.find(endpointKey);
     if (it != sessionMap.end()) {
         if(!it->second.sessionKey.empty()) {
-           LOG_DEBUG_EXT("Received heartbeat from client " + endpointKey + ", sessionKey=" + it->second.sessionKey);
+           LOG_DEBUG("Received heartbeat from client " + endpointKey + ", sessionKey=" + it->second.sessionKey);
            redis.expire("session_" + it->second.sessionKey, HEARTBEAT_TIMEOUT_SEC + 1);
            it->second.lastHeartbeat = std::chrono::steady_clock::now();
+
+
             S_Heartbeat resp;
             std::memset(&resp, 0, sizeof(resp));
             resp.header.packetId = PACKET_S_HEARTBEAT;
             resp.timestamp = static_cast<int32_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
             sendToClient(&resp, sizeof(resp), clientSock);
+        }else{
+           LOG_DEBUG("Received heartbeat from client " + endpointKey + " with no sessionKey set.");
+        LOG_DEBUG("SessionInfo dump: connected=" + std::to_string(it->second.connected) + 
+              ", sessionKey='" + it->second.sessionKey + "'" +
+              ", clientSock=" + std::to_string(it->second.clientSock));
         }
+    }else{
+        LOG_DEBUG("Received heartbeat from unknown client " + endpointKey + ". Ignoring.");
     }
 }
 

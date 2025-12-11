@@ -19,8 +19,6 @@
 
 class AuthServer : public BaseServer {
 public:
-    // Change sessionMap to use std::string (IP:port) as key
-    std::unordered_map<std::string, SessionInfo> sessionMap;
 
     AuthServer() : BaseServer("auth") {}
 
@@ -376,11 +374,21 @@ public:
         }
     }
     void onClientConnected(intptr_t clientSock, const sockaddr_in& clientAddr) {
+        LOG_DEBUG("onClientConnected Auth Server: fd=" + std::to_string(clientSock) + ", endpoint=" + EndpointToString(clientAddr));
         std::string endpointKey = EndpointToString(clientAddr);
         auto& session = sessionMap[endpointKey];
         session.sessionKey = GenerateSessionKey();
         session.connected = true;
         session.clientAddr = clientAddr; // Store sockaddr_in for this session
+        LOG_DEBUG("Current sessionMap state: " + std::to_string(sessionMap.size()) + " entries");
+            for (const auto& [key, sess] : sessionMap) {
+                LOG_DEBUG_EXT("  Session[" + key + "]: playerId=" + std::to_string(sess.playerId) + 
+                     ", charId=" + std::to_string(sess.charId) + 
+                     ", sessionKey=" + sess.sessionKey + 
+                     ", username=" + sess.username + 
+                     ", connected=" + (sess.connected ? "true" : "false") +
+                     ", clientSock=" + std::to_string(sess.clientSock));
+            }
         BaseServer::onClientConnected(clientSock, clientAddr);
 
     }

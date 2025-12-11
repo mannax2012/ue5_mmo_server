@@ -1,4 +1,5 @@
 #include "MMOClient.h"
+#include "MMOGameInstance.h" // Fix for UMMOGameInstance undefined
 #include "Sockets.h"
 #include "SocketSubsystem.h"
 #include "TimerManager.h"
@@ -37,18 +38,8 @@ DEFINE_LOG_CATEGORY_STATIC(LogMMOClient, Log, All);
 // --- Packet structs (must match server) ---
 #include "Packets.h" // You should port or copy the struct definitions to a shared header for client and server
 
-// --- Serialization helpers ---
-template<typename T>
-static void SerializeStruct(const T& packet, TArray<uint8>& out)
-{
-    out.SetNumUninitialized(sizeof(T));
-    FMemory::Memcpy(out.GetData(), &packet, sizeof(T));
-    // --- Automatic outgoing packet logging ---
-    // Assumes all packets have a 'header' member with 'packetId'
-    const uint8* headerPtr = reinterpret_cast<const uint8*>(&packet.header);
 
-    UE_LOG(LogMMOClient, Log, TEXT("[OUT] packetId: %d | Type: %hs"), packet.header.packetId,  PacketTypeToString(packet.header.packetId));
-}
+
 
 template<typename T>
 static bool DeserializeStruct(const TArray<uint8>& in, T& out)
@@ -296,7 +287,11 @@ void UMMOClient::SendToGame(const TArray<uint8>& Data)
     for (int32 i = 0; i < Data.Num(); ++i) HexDump += FString::Printf(TEXT("%02x "), Data[i]);
     UE_LOG(LogMMOClient, Verbose, TEXT("[RAW OUT] Data: %s"), *HexDump);
     TArray<uint8> Out;
-    if (EncryptAndCompress(Data, Out) && GameSocket.IsValid() && GameServerAddr.IsValid()) {
+    if (!GameSocket.IsValid() || !GameServerAddr.IsValid()) {
+        UE_LOG(LogMMOClient, Warning, TEXT("SendToGame called but GameSocket or GameServerAddr is invalid! Data not sent."));
+        return;
+    }
+    if (EncryptAndCompress(Data, Out)) {
         uint32 PacketLen = Out.Num();
         uint32 NetPacketLen = htonl(PacketLen);
         TArray<uint8> SendBuf;
@@ -314,10 +309,8 @@ void UMMOClient::SendToGame(const TArray<uint8>& Data)
         } else {
             UE_LOG(LogMMOClient, Verbose, TEXT("SendTo Game succeeded. Sent %d bytes."), Sent);
         }
+        UE_LOG(LogMMOClient, Log, TEXT("Sending to GameServerAddr: %s"), *GameServerAddr->ToString(true));
     }
-
-    // Log the remote address before sending
-    UE_LOG(LogMMOClient, Log, TEXT("Sending to GameServerAddr: %s"), *GameServerAddr->ToString(true));
 }
 
 void UMMOClient::SendToChat(const TArray<uint8>& Data)
@@ -899,17 +892,37 @@ void UMMOClient::SendHeartbeat(const FString& SocketType)
     Packet.timestamp = Now;
     TArray<uint8> Data;
     SerializeStruct(Packet, Data);
-    if (SocketType == TEXT("Auth") && AuthSocket.IsValid() && AuthSocket->GetConnectionState() == SCS_Connected) {
-        SendToAuth(Data);
-        CheckHeartbeatTimeout(SocketType, AuthHeartbeat);
-    } else if (SocketType == TEXT("Game") && GameSocket.IsValid() && GameSocket->GetConnectionState() == SCS_Connected) {
-        SendToGame(Data);
-        CheckHeartbeatTimeout(SocketType, GameHeartbeat);
-    } else if (SocketType == TEXT("Chat") && ChatSocket.IsValid() && ChatSocket->GetConnectionState() == SCS_Connected) {
-        SendToChat(Data);
-        CheckHeartbeatTimeout(SocketType, ChatHeartbeat);
+    if (SocketType == TEXT("Auth")) {
+        if (!AuthSocket.IsValid()) {
+            UE_LOG(LogMMOClient, Warning, TEXT("AuthSocket invalid when sending heartbeat."));
+        } else if (AuthSocket->GetConnectionState() != SCS_Connected) {
+            UE_LOG(LogMMOClient, Warning, TEXT("AuthSocket not connected when sending heartbeat. State: %d"), (int32)AuthSocket->GetConnectionState());
+        } else {
+            SendToAuth(Data);
+            CheckHeartbeatTimeout(SocketType, AuthHeartbeat);
+            UE_LOG(LogMMOClient, Verbose, TEXT("Heartbeat sent to %s server."), *SocketType);
+        }
+    } else if (SocketType == TEXT("Game")) {
+        if (!GameSocket.IsValid()) {
+            UE_LOG(LogMMOClient, Warning, TEXT("GameSocket invalid when sending heartbeat."));
+        } else if (GameSocket->GetConnectionState() != SCS_Connected) {
+            UE_LOG(LogMMOClient, Warning, TEXT("GameSocket not connected when sending heartbeat. State: %d"), (int32)GameSocket->GetConnectionState());
+        } else {
+            SendToGame(Data);
+            CheckHeartbeatTimeout(SocketType, GameHeartbeat);
+            UE_LOG(LogMMOClient, Verbose, TEXT("Heartbeat sent to %s server."), *SocketType);
+        }
+    } else if (SocketType == TEXT("Chat")) {
+        if (!ChatSocket.IsValid()) {
+            UE_LOG(LogMMOClient, Warning, TEXT("ChatSocket invalid when sending heartbeat."));
+        } else if (ChatSocket->GetConnectionState() != SCS_Connected) {
+            UE_LOG(LogMMOClient, Warning, TEXT("ChatSocket not connected when sending heartbeat. State: %d"), (int32)ChatSocket->GetConnectionState());
+        } else {
+            SendToChat(Data);
+            CheckHeartbeatTimeout(SocketType, ChatHeartbeat);
+            UE_LOG(LogMMOClient, Verbose, TEXT("Heartbeat sent to %s server."), *SocketType);
+        }
     }
-    UE_LOG(LogMMOClient, Verbose, TEXT("Heartbeat sent to %s server."), *SocketType);
 }
 
 void UMMOClient::CheckHeartbeatTimeout(const FString& SocketType, FHeartbeatState& State)

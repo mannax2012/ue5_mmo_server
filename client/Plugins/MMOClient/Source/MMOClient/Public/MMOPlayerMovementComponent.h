@@ -17,6 +17,7 @@ protected:
     FTimerHandle MoveTickHandle;
     void SendCurrentPositionToServer();
     void SendMoveRequestToServer(const FVector& Position);
+    UFUNCTION()
     void OnMoveResponse(FVector ConfirmedLocation);
     void OnServerMoveConfirmed(const FVector& ConfirmedLocation);
 

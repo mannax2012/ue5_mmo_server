@@ -1,6 +1,12 @@
 #pragma once
 #include "Engine/GameInstance.h"
+#include "NetworkedEntityManager.h" // Added for UNetworkedEntityManager
+#include "Packets.h" // Added for packet structs and constants
 #include "MMOGameInstance.generated.h"
+
+
+// If GPlayInEditorID is not defined elsewhere, add a comment or define as needed
+// extern int32 GPlayInEditorID; // Uncomment if needed
 
 UCLASS()
 class MMOCLIENT_API UMMOGameInstance : public UGameInstance
