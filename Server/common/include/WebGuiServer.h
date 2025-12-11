@@ -25,6 +25,7 @@ private:
     void RouteRequest(const std::string& target, boost::beast::http::request<boost::beast::http::string_body>&& req, boost::beast::tcp_stream&& stream);
     void HandleSessions(boost::beast::http::request<boost::beast::http::string_body>&& req, boost::beast::tcp_stream&& stream);
     void HandleShards(boost::beast::http::request<boost::beast::http::string_body>&& req, boost::beast::tcp_stream&& stream);
+    void HandleDashboard(boost::beast::http::request<boost::beast::http::string_body>&& req, boost::beast::tcp_stream&& stream);
     void HandleEntities(boost::beast::http::request<boost::beast::http::string_body>&& req, boost::beast::tcp_stream&& stream);
     void HandleLogs(boost::beast::http::request<boost::beast::http::string_body>&& req, boost::beast::tcp_stream&& stream);
     void HandleFrontend(boost::beast::http::request<boost::beast::http::string_body>&& req, boost::beast::tcp_stream&& stream);

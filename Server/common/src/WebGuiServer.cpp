@@ -14,6 +14,9 @@
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <streambuf>
+#include "../webgui/index_html.h"
+
+#include <sys/utsname.h>
 
 using tcp = boost::asio::ip::tcp;
 namespace http = boost::beast::http;
@@ -73,6 +76,8 @@ void WebGuiServer::RouteRequest(const std::string& target, http::request<http::s
         HandleEntities(std::move(req), std::move(stream));
     } else if (target.rfind("/logs", 0) == 0) { // allow /logs?filter=...
         HandleLogs(std::move(req), std::move(stream));
+    } else if (target == "/dashboard") {
+        HandleDashboard(std::move(req), std::move(stream));
     } else if (target == "/" || target == "/index.html") {
         HandleFrontend(std::move(req), std::move(stream));
     } else {
@@ -84,6 +89,72 @@ void WebGuiServer::RouteRequest(const std::string& target, http::request<http::s
         http::write(stream, res);
     }
 }
+// --- Dashboard handler ---
+void WebGuiServer::HandleDashboard(http::request<http::string_body>&& req, boost::beast::tcp_stream&& stream) {
+    nlohmann::json j;
+    // Server type
+    j["serverType"] = server ? server->serverType : "unknown";
+    // Server port
+    j["port"] = port;
+    // Server IP (try to get from config or socket)
+    std::string ip = "unknown";
+    if (server) {
+        ip = server->GetConfig().get("bind_ip", "0.0.0.0");
+    }
+    j["ip"] = ip;
+    // Uptime
+    static auto start_time = std::chrono::steady_clock::now();
+    auto now = std::chrono::steady_clock::now();
+    auto uptime_sec = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
+    j["uptime_sec"] = uptime_sec;
+    // OS info
+#ifdef _WIN32
+    j["os"] = "Windows";
+#else
+    struct utsname uts;
+    if (uname(&uts) == 0) {
+        j["os"] = std::string(uts.sysname) + " " + uts.release;
+    } else {
+        j["os"] = "Unknown";
+    }
+#endif
+    // CPU and RAM info (Linux only)
+#ifdef __linux__
+    // CPU info
+    std::ifstream cpuinfo("/proc/cpuinfo");
+    std::string line, model;
+    int cores = 0;
+    while (std::getline(cpuinfo, line)) {
+        if (line.find("model name") != std::string::npos && model.empty()) {
+            auto pos = line.find(":");
+            if (pos != std::string::npos) model = line.substr(pos + 2);
+        }
+        if (line.find("processor") != std::string::npos) ++cores;
+    }
+    j["cpu_model"] = model;
+    j["cpu_cores"] = cores;
+    // RAM info
+    std::ifstream meminfo("/proc/meminfo");
+    long mem_total = 0, mem_free = 0;
+    while (std::getline(meminfo, line)) {
+        if (line.find("MemTotal") != std::string::npos) {
+            sscanf(line.c_str(), "MemTotal: %ld kB", &mem_total);
+        }
+        if (line.find("MemAvailable") != std::string::npos) {
+            sscanf(line.c_str(), "MemAvailable: %ld kB", &mem_free);
+        }
+    }
+    j["ram_total_kb"] = mem_total;
+    j["ram_available_kb"] = mem_free;
+#endif
+    http::response<http::string_body> res{http::status::ok, req.version()};
+    res.set(http::field::server, "MMO-Server-WebGUI");
+    res.set(http::field::content_type, "application/json");
+    res.body() = j.dump();
+    res.prepare_payload();
+    http::write(stream, res);
+}
+
 
 void WebGuiServer::HandleSessions(http::request<http::string_body>&& req, boost::beast::tcp_stream&& stream) {
     nlohmann::json j;
@@ -218,12 +289,10 @@ void WebGuiServer::HandleLogs(http::request<http::string_body>&& req, boost::bea
 }
 
 void WebGuiServer::HandleFrontend(http::request<http::string_body>&& req, boost::beast::tcp_stream&& stream) {
-    std::ifstream t("../common/webgui/index.html");
-    std::string html((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
     http::response<http::string_body> res{http::status::ok, req.version()};
     res.set(http::field::server, "MMO-Server-WebGUI");
     res.set(http::field::content_type, "text/html");
-    res.body() = html;
+    res.body() = EMBEDDED_INDEX_HTML;
     res.prepare_payload();
     http::write(stream, res);
 }

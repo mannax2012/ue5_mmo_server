@@ -59,7 +59,7 @@ public:
     bool IsWebGuiEnabled() const { return webGuiEnabled; } // NEW: Accessor for web GUI enabled flag
 
     bool loadConfig(int argc, char** argv);
-
+    std::string serverType;
 protected:
     
     bool startSocket();
@@ -69,7 +69,7 @@ protected:
     void PrintMySQLDiagnostics(); // NEW: MySQL diagnostics
 
     static std::atomic<bool> running;
-    std::string serverType;
+    
     SocketPacketHandler packetHandler;
     Config config;
     std::string configPath;
