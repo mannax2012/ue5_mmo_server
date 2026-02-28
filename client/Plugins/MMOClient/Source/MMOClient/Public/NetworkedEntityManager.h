@@ -42,6 +42,7 @@ class MMOCLIENT_API UNetworkedEntityManager : public UObject
     GENERATED_BODY()
 public:
     UNetworkedEntityManager();
+    virtual void PostInitProperties() override;
     // Singleton accessor
     static UNetworkedEntityManager* Get(UGameInstance* GameInstance);
     // Auto-register/deregister

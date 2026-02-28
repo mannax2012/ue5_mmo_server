@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <memory>
-
+#include "../../common/include/BaseServer.h"
 enum EntityType { PLAYER, NPC, MOB, ITEM };
 
 // Base class for all entities in the world

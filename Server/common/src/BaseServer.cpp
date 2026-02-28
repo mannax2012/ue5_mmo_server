@@ -138,7 +138,7 @@ int BaseServer::run(int argc, char** argv) {
         PacketHeader header;
         std::memcpy(&header, plain.data(), sizeof(PacketHeader));
         const char* packetName = PacketTypeToString(header.packetId);
-        LOG_DEBUG("Received packet from endpoint=" + EndpointToString(clientAddr) + ", fd=" + std::to_string(clientSock) + ", packetId=" + std::to_string(header.packetId) + " (" + packetName + "), size=" + std::to_string(plain.size()));
+        LOG_DEBUG_EXT("Received packet from endpoint=" + EndpointToString(clientAddr) + ", fd=" + std::to_string(clientSock) + ", packetId=" + std::to_string(header.packetId) + " (" + packetName + "), size=" + std::to_string(plain.size()));
 
         // Automatic variable-length struct array support:
         // If the packet struct in Packets.h has a count field (e.g. numPlayers),
@@ -251,24 +251,36 @@ void BaseServer::handleHeartbeatPacket(const std::vector<uint8_t>& data, intptr_
     auto it = sessionMap.find(endpointKey);
     if (it != sessionMap.end()) {
         if(!it->second.sessionKey.empty()) {
-           LOG_DEBUG("Received heartbeat from client " + endpointKey + ", sessionKey=" + it->second.sessionKey);
+           LOG_DEBUG_EXT("Received heartbeat from client " + endpointKey + ", sessionKey=" + it->second.sessionKey);
            redis.expire("session_" + it->second.sessionKey, HEARTBEAT_TIMEOUT_SEC + 1);
+           // Update the clientSock in case it changed (e.g. reconnect from same endpoint)
+           // Log if the endpoint's clientSock changed (e.g. reconnect from same endpoint)
+           if (it->second.clientSock != clientSock) {
+               LOG_INFO("Endpoint " + endpointKey + " changed clientSock from " +
+                        std::to_string(it->second.clientSock) + " to " +
+                        std::to_string(clientSock));
+                // Update only the 'fd' field in Redis session hash
+                redis.hset("session_" + it->second.sessionKey, {{"fd", std::to_string(clientSock)}});
+           }
+           it->second.clientSock = clientSock;
+           
            it->second.lastHeartbeat = std::chrono::steady_clock::now();
 
-
+            // Store the updated session info back into the sessionMap
+           sessionMap[endpointKey] = it->second;
             S_Heartbeat resp;
             std::memset(&resp, 0, sizeof(resp));
             resp.header.packetId = PACKET_S_HEARTBEAT;
             resp.timestamp = static_cast<int32_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
             sendToClient(&resp, sizeof(resp), clientSock);
         }else{
-           LOG_DEBUG("Received heartbeat from client " + endpointKey + " with no sessionKey set.");
+           LOG_DEBUG_EXT("Received heartbeat from client " + endpointKey + " with no sessionKey set.");
         LOG_DEBUG("SessionInfo dump: connected=" + std::to_string(it->second.connected) + 
               ", sessionKey='" + it->second.sessionKey + "'" +
               ", clientSock=" + std::to_string(it->second.clientSock));
         }
     }else{
-        LOG_DEBUG("Received heartbeat from unknown client " + endpointKey + ". Ignoring.");
+        LOG_DEBUG_EXT("Received heartbeat from unknown client " + endpointKey + ". Ignoring.");
     }
 }
 

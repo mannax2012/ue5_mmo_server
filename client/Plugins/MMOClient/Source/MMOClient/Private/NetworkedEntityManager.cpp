@@ -12,9 +12,23 @@
 #include "UObject/ConstructorHelpers.h"
 #include "UObject/SoftObjectPtr.h"
 #include "Packets.h"
-
+// Define a log category for MMOClient
+DEFINE_LOG_CATEGORY_STATIC(LogMMOClient, Log, All);
 // --- AActor implementation for placable manager ---
-UNetworkedEntityManager::UNetworkedEntityManager() {}
+UNetworkedEntityManager::UNetworkedEntityManager()
+{
+}
+
+void UNetworkedEntityManager::PostInitProperties()
+{
+    Super::PostInitProperties();
+    UE_LOG(LogMMOClient, Log, TEXT("[NetworkedEntityManager] (PostInitProperties) Instance class: %s"), *GetClass()->GetName());
+    if (PlayerActorClass.IsValid()) {
+        UE_LOG(LogMMOClient, Log, TEXT("[NetworkedEntityManager] (PostInitProperties) PlayerActorClass set to: %s"), *PlayerActorClass->GetName());
+    } else {
+        UE_LOG(LogMMOClient, Warning, TEXT("[NetworkedEntityManager] (PostInitProperties) PlayerActorClass is NOT set."));
+    }
+}
 
 TWeakObjectPtr<UNetworkedEntityManager> UNetworkedEntityManager::Singleton;
 
@@ -22,10 +36,33 @@ UNetworkedEntityManager* UNetworkedEntityManager::Get(UGameInstance* GameInstanc
 {
     if (!Singleton.IsValid()) {
         if (GameInstance) {
-            UNetworkedEntityManager* NewMgr = NewObject<UNetworkedEntityManager>(GameInstance, GameInstance->GetClass()->GetDefaultObject<UMMOGameInstance>()->NetworkedEntityManagerClass);
-            if (NewMgr) {
-                NewMgr->RegisterWithGameInstance(GameInstance);
-                Singleton = NewMgr;
+            UMMOGameInstance* MMOInst = Cast<UMMOGameInstance>(GameInstance);
+            if (MMOInst && MMOInst->NetworkedEntityManagerClass) {
+                UNetworkedEntityManager* NewMgr = NewObject<UNetworkedEntityManager>(GameInstance, MMOInst->NetworkedEntityManagerClass);
+                if (NewMgr) {
+                    // Copy Blueprint default property values from CDO
+                    UNetworkedEntityManager* CDO = Cast<UNetworkedEntityManager>(MMOInst->NetworkedEntityManagerClass->GetDefaultObject());
+                    if (CDO) {
+                        NewMgr->PlayerActorClass = CDO->PlayerActorClass;
+                        if (!NewMgr->PlayerActorClass.IsNull()) {
+                            NewMgr->PlayerActorClass.LoadSynchronous();
+                        }
+                        NewMgr->MobActorClass = CDO->MobActorClass;
+                        if (!NewMgr->MobActorClass.IsNull()) {
+                            NewMgr->MobActorClass.LoadSynchronous();
+                        }
+                        NewMgr->NPCActorClass = CDO->NPCActorClass;
+                        if (!NewMgr->NPCActorClass.IsNull()) {
+                            NewMgr->NPCActorClass.LoadSynchronous();
+                        }
+                        NewMgr->ItemActorClass = CDO->ItemActorClass;
+                        if (!NewMgr->ItemActorClass.IsNull()) {
+                            NewMgr->ItemActorClass.LoadSynchronous();
+                        }
+                    }
+                    NewMgr->RegisterWithGameInstance(GameInstance);
+                    Singleton = NewMgr;
+                }
             }
         }
     }
@@ -77,25 +114,59 @@ AActor* UNetworkedEntityManager::SpawnActorForEntity(UWorld* World, ENetworkedEn
     UClass* ActorClass = nullptr;
     switch (Type) {
         case ENetworkedEntityType::Player:
-            ActorClass = PlayerActorClass.IsValid() ? PlayerActorClass.Get() : AActor::StaticClass();
+            if (PlayerActorClass.IsValid()) {
+                ActorClass = PlayerActorClass.Get();
+            } else if (!PlayerActorClass.IsNull()) {
+                ActorClass = PlayerActorClass.LoadSynchronous();
+            }
+            if (!ActorClass) {
+                UE_LOG(LogMMOClient, Error, TEXT("[NetworkedEntityManager] PlayerActorClass is not set or failed to load! Cannot spawn player entity."));
+                return nullptr;
+            }
             break;
         case ENetworkedEntityType::Mob:
-            ActorClass = MobActorClass.IsValid() ? MobActorClass.Get() : AActor::StaticClass();
+            if (MobActorClass.IsValid()) {
+                ActorClass = MobActorClass.Get();
+            } else if (!MobActorClass.IsNull()) {
+                ActorClass = MobActorClass.LoadSynchronous();
+            } else {
+                ActorClass = AActor::StaticClass();
+            }
             break;
         case ENetworkedEntityType::NPC:
-            ActorClass = NPCActorClass.IsValid() ? NPCActorClass.Get() : AActor::StaticClass();
+            if (NPCActorClass.IsValid()) {
+                ActorClass = NPCActorClass.Get();
+            } else if (!NPCActorClass.IsNull()) {
+                ActorClass = NPCActorClass.LoadSynchronous();
+            } else {
+                ActorClass = AActor::StaticClass();
+            }
             break;
         case ENetworkedEntityType::Item:
-            ActorClass = ItemActorClass.IsValid() ? ItemActorClass.Get() : AActor::StaticClass();
+            if (ItemActorClass.IsValid()) {
+                ActorClass = ItemActorClass.Get();
+            } else if (!ItemActorClass.IsNull()) {
+                ActorClass = ItemActorClass.LoadSynchronous();
+            } else {
+                ActorClass = AActor::StaticClass();
+            }
             break;
         default:
             ActorClass = AActor::StaticClass();
             break;
     }
-    if (!ActorClass || !World) return nullptr;
+    if (!ActorClass || !World) {
+        UE_LOG(LogMMOClient, Error, TEXT("[NetworkedEntityManager] Invalid ActorClass or World for entity spawn (Type=%d)"), (int32)Type);
+        return nullptr;
+    }
     FActorSpawnParameters Params;
     Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-    return World->SpawnActor<AActor>(ActorClass, Location, Rotation, Params);
+    AActor* Spawned = World->SpawnActor<AActor>(ActorClass, Location, Rotation, Params);
+    if (!Spawned) {
+        UE_LOG(LogMMOClient, Error, TEXT("[NetworkedEntityManager] Failed to spawn actor of class %s at %s (Type=%d)"),
+            *GetNameSafe(ActorClass), *Location.ToString(), (int32)Type);
+    }
+    return Spawned;
 }
 
 void UNetworkedEntityManager::SpawnEntity(int64 EntityId, ENetworkedEntityType Type, int32 ShardId, const FVector& Location, const FRotator& Rotation)
@@ -271,18 +342,16 @@ void UNetworkedEntityManager::HandleItemDespawnPacket(const S_ItemDespawn& Packe
 // Type-specific spawn helpers (extend as needed for extra info)
 void UNetworkedEntityManager::SpawnPlayerEntity(int64 EntityId, int32 ShardId, const FVector& Location, const FRotator& Rotation, const FString& Name, int32 ClassId, int32 Level)
 {
-    // TODO: Store player-specific info in FNetworkedEntityInfo or a derived struct if needed
-    SpawnEntity(EntityId, ENetworkedEntityType::Player, ShardId, Location, Rotation);
-    // You can use Name, ClassId, Level as needed
-    FNetworkedEntityInfo* Info = Entities.Find(EntityId);
-    if (Info) {
-       // Info->Name = Name; // Store name in the info struct
-        //Info->ClassId = ClassId; // Store class ID
-        //Info->Level = Level; // Store level
+    UE_LOG(LogMMOClient, Log, TEXT("[NetworkedEntityManager] Spawning player entity: Id=%lld, Shard=%d, Name=%s, ClassId=%d, Level=%d, Location=%s, Rotation=%s"),
+        EntityId, ShardId, *Name, ClassId, Level, *Location.ToString(), *Rotation.ToString());
+    if (PlayerActorClass.IsValid()) {
+        UE_LOG(LogMMOClient, Log, TEXT("[NetworkedEntityManager] (RUNTIME) PlayerActorClass is: %s"), *PlayerActorClass->GetName());
+    } else {
+        UE_LOG(LogMMOClient, Warning, TEXT("[NetworkedEntityManager] (RUNTIME) PlayerActorClass is NOT set."));
     }
+    SpawnEntity(EntityId, ENetworkedEntityType::Player, ShardId, Location, Rotation);
+    FNetworkedEntityInfo* Info = Entities.Find(EntityId);
     if (Info && Info->Actor.IsValid()) {
-        Info->Actor->SetActorLabel(Name);
-        // Possess the actor if this is the local player
         UWorld* World = Info->Actor->GetWorld();
         if (World)
         {
@@ -294,13 +363,21 @@ void UNetworkedEntityManager::SpawnPlayerEntity(int64 EntityId, int32 ShardId, c
                 APawn* Pawn = Cast<APawn>(Info->Actor.Get());
                 if (PC && Pawn)
                 {
+                    UE_LOG(LogMMOClient, Log, TEXT("[NetworkedEntityManager] Possessing player pawn for local player: %s (EntityId=%lld)"), *Name, EntityId);
                     PC->Possess(Pawn);
+                }
+                else
+                {
+                    FString ActorClassName = Info->Actor.IsValid() ? Info->Actor->GetClass()->GetName() : TEXT("NULL");
+                    UE_LOG(LogMMOClient, Warning, TEXT("[NetworkedEntityManager] Failed to possess pawn: PC=%p, Pawn=%p (EntityId=%lld, ActorClass=%s)"), PC, Pawn, EntityId, *ActorClassName);
                 }
             }
         }
     }
-
-
+    else
+    {
+        UE_LOG(LogMMOClient, Warning, TEXT("[NetworkedEntityManager] Failed to spawn player actor for EntityId=%lld"), EntityId);
+    }
 }
 
 void UNetworkedEntityManager::SpawnMobEntity(int64 EntityId, int32 ShardId, const FVector& Location, const FRotator& Rotation, int32 MobTypeId, int32 Level)

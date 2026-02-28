@@ -42,6 +42,7 @@ void GameServer::handlePacket(const PacketHeader& header, const std::vector<uint
             if (sessionData.count("charId")) session.charId = std::stoi(sessionData["charId"]);
             if (sessionData.count("username")) session.username = sessionData["username"];
             if (sessionData.count("sessionKey")) session.sessionKey = sessionData["sessionKey"];
+            if(sessionData.count("charName")) session.charName = sessionData["charName"];
             else session.sessionKey = sessionKey;
             std::vector<std::pair<std::string, std::string>> updateFields = {
                 {"fd", std::to_string(clientSock)}
@@ -50,7 +51,7 @@ void GameServer::handlePacket(const PacketHeader& header, const std::vector<uint
             session.connected = true;
             session.lastHeartbeat = std::chrono::steady_clock::now();
             session.clientAddr = clientAddr;
-            LOG_DEBUG("Session updated in sessionMap for endpoint " + endpointKey + ", sessionKey: " + session.sessionKey);
+            LOG_DEBUG("Session updated in sessionMap for endpoint " + endpointKey + ", sessionKey: " + session.sessionKey + ", clientSock: " + std::to_string(clientSock));
             S_ConnectResult resp{};
             resp.header.packetId = PACKET_S_CONNECT_RESULT;
             resp.resultCode = 0; // success
@@ -83,10 +84,14 @@ void GameServer::handlePacket(const PacketHeader& header, const std::vector<uint
 bool GameServer::loadConfig(int argc, char** argv) {
     LOG("Loading game server configuration...");
     BaseServer::loadConfig(argc, argv);
-
-     //Initialize Zone Size  
     ZoneManager::Get()->SetZoneSize(config.getInt("zone_size", 100));
     return true;
+}
+
+int GameServer::run(int argc, char** argv) {
+    // Call our own loadConfig, then BaseServer::run for the rest
+    if (!loadConfig(argc, argv)) return 1;
+    return BaseServer::BaseServer::run(argc, argv);
 }
 
 void GameServer::onClientDisconnected(intptr_t clientSock, const sockaddr_in& clientAddr) {
@@ -98,6 +103,7 @@ void GameServer::onClientDisconnected(intptr_t clientSock, const sockaddr_in& cl
             it->second.playerEntity->SaveToDB(mysql);
             zoneManager.RemoveEntityFromZone(it->second.playerEntity->zoneId, it->second.playerEntity->id);
         }
+        sessionMap.erase(it); // Remove session to avoid stale sockets
     }
     BaseServer::onClientDisconnected(clientSock, clientAddr);
 }

@@ -128,6 +128,14 @@ static bool DecompressLZ4(const TArray<uint8>& In, TArray<uint8>& Out, int32 Unc
 }
 
 // --- MMOClient implementation ---
+// Protocol selection for socket connections
+enum class EMMOClientIPVersion {
+    Auto,
+    IPv4,
+    IPv6
+};
+
+EMMOClientIPVersion ClientIPVersion = EMMOClientIPVersion::Auto; // Set via config or code
 
 // --- Update Connect/Disconnect logic ---
 void UMMOClient::ConnectAuth(const FString& Host, int32 Port)
@@ -136,28 +144,43 @@ void UMMOClient::ConnectAuth(const FString& Host, int32 Port)
     LastAuthPort = Port;
     UE_LOG(LogMMOClient, Log, TEXT("Connecting to Auth server (UDP): %s:%d"), *Host, Port);
     ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
+    bool bIsIPv6 = false;
+    // Detect IPv6 by presence of ':' and absence of '.'
+    if (ClientIPVersion == EMMOClientIPVersion::IPv6 || (ClientIPVersion == EMMOClientIPVersion::Auto && Host.Contains(":") && !Host.Contains("."))) {
+        bIsIPv6 = true;
+    }
+    FName ProtocolType = bIsIPv6 ? FNetworkProtocolTypes::IPv6 : FNetworkProtocolTypes::IPv4;
     // Only create socket if not already valid
     if (!AuthSocket.IsValid()) {
-        AuthSocket = MakeShareable(SocketSubsystem->CreateSocket(NAME_DGram, TEXT("AuthSocket"), FNetworkProtocolTypes::IPv4));
-        // Explicitly bind to a local ephemeral port for UDP
+        AuthSocket = MakeShareable(SocketSubsystem->CreateSocket(NAME_DGram, TEXT("AuthSocket"), ProtocolType));
         TSharedRef<FInternetAddr> LocalAddr = SocketSubsystem->CreateInternetAddr();
         LocalAddr->SetAnyAddress();
-        LocalAddr->SetPort(0); // 0 = let OS pick ephemeral port
+        LocalAddr->SetPort(0);
         bool bDidBind = AuthSocket->Bind(*LocalAddr);
         if (!bDidBind) {
             UE_LOG(LogMMOClient, Error, TEXT("Failed to bind AuthSocket to local address!"));
         }
         AuthSocket->SetNonBlocking(true);
-        // Log the local address and port after binding
         TSharedRef<FInternetAddr> BoundAddr = SocketSubsystem->CreateInternetAddr();
         AuthSocket->GetAddress(*BoundAddr);
         UE_LOG(LogMMOClient, Log, TEXT("AuthSocket bound to: %s"), *BoundAddr->ToString(true));
     }
-    // Use FIPv4Address to guarantee IPv4
-    FIPv4Address OutIp;
-    FIPv4Address::Parse(Host, OutIp);
     AuthServerAddr = SocketSubsystem->CreateInternetAddr();
-    AuthServerAddr->SetIp(OutIp.Value);
+    if (bIsIPv6) {
+        bool bIsValid = false;
+        AuthServerAddr->SetIp(*Host, bIsValid); // false = allow IPv6
+        if (!bIsValid) {
+            UE_LOG(LogMMOClient, Error, TEXT("Failed to parse IPv6 address: %s"), *Host);
+            return;
+        }
+    } else {
+        FIPv4Address OutIp;
+        if (!FIPv4Address::Parse(Host, OutIp)) {
+            UE_LOG(LogMMOClient, Error, TEXT("Failed to parse IPv4 address: %s"), *Host);
+            return;
+        }
+        AuthServerAddr->SetIp(OutIp.Value);
+    }
     AuthServerAddr->SetPort(Port);
     SetClientState(EMMOClientState::CONNECTING_AUTH);
     DisconnectGame();
@@ -191,20 +214,34 @@ void UMMOClient::ConnectGame(const FString& Host, int32 Port)
     LastGamePort = Port;
     UE_LOG(LogMMOClient, Log, TEXT("Connecting to Game server (UDP): %s:%d"), *Host, Port);
     ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
-    // Only create socket if not already valid
+    bool bIsIPv6 = false;
+    if (ClientIPVersion == EMMOClientIPVersion::IPv6 || (ClientIPVersion == EMMOClientIPVersion::Auto && Host.Contains(":") && !Host.Contains("."))) {
+        bIsIPv6 = true;
+    }
+    FName ProtocolType = bIsIPv6 ? FNetworkProtocolTypes::IPv6 : FNetworkProtocolTypes::IPv4;
+    TSharedRef<FInternetAddr> GameBoundAddr = SocketSubsystem->CreateInternetAddr();
     if (!GameSocket.IsValid()) {
-        GameSocket = MakeShareable(SocketSubsystem->CreateSocket(NAME_DGram, TEXT("GameSocket"), FNetworkProtocolTypes::IPv4));
+        GameSocket = MakeShareable(SocketSubsystem->CreateSocket(NAME_DGram, TEXT("GameSocket"), ProtocolType));
         GameSocket->SetNonBlocking(true);
-        // Log the local address and port after binding
-        TSharedRef<FInternetAddr> GameBoundAddr = SocketSubsystem->CreateInternetAddr();
         GameSocket->GetAddress(*GameBoundAddr);
         UE_LOG(LogMMOClient, Log, TEXT("GameSocket bound to: %s"), *GameBoundAddr->ToString(true));
     }
-    // Use FIPv4Address to guarantee IPv4
-    FIPv4Address OutIp;
-    FIPv4Address::Parse(Host, OutIp);
     GameServerAddr = SocketSubsystem->CreateInternetAddr();
-    GameServerAddr->SetIp(OutIp.Value);
+    if (bIsIPv6) {
+        bool bIsValid = false;
+        GameServerAddr->SetIp(*Host, bIsValid);
+        if (!bIsValid) {
+            UE_LOG(LogMMOClient, Error, TEXT("Failed to parse IPv6 address: %s"), *Host);
+            return;
+        }
+    } else {
+        FIPv4Address OutIp;
+        if (!FIPv4Address::Parse(Host, OutIp)) {
+            UE_LOG(LogMMOClient, Error, TEXT("Failed to parse IPv4 address: %s"), *Host);
+            return;
+        }
+        GameServerAddr->SetIp(OutIp.Value);
+    }
     GameServerAddr->SetPort(Port);
     SetClientState(EMMOClientState::CONNECTING_GAME);
     DisconnectAuth();
@@ -309,7 +346,7 @@ void UMMOClient::SendToGame(const TArray<uint8>& Data)
         } else {
             UE_LOG(LogMMOClient, Verbose, TEXT("SendTo Game succeeded. Sent %d bytes."), Sent);
         }
-        UE_LOG(LogMMOClient, Log, TEXT("Sending to GameServerAddr: %s"), *GameServerAddr->ToString(true));
+        UE_LOG(LogMMOClient, Verbose, TEXT("Sending to GameServerAddr: %s"), *GameServerAddr->ToString(true));
     }
 }
 
@@ -611,6 +648,11 @@ void UMMOClient::HandleGamePacket(const TArray<uint8>& Data)
     if (Data.Num() < sizeof(PacketHeader)) return;
     PacketHeader header;
     FMemory::Memcpy(&header, Data.GetData(), sizeof(PacketHeader));
+    // Exclude move and heartbeat packets from log
+    if (header.packetId != PACKET_S_MOVE && header.packetId != PACKET_S_HEARTBEAT && header.packetId != PACKET_C_MOVE && header.packetId != PACKET_C_HEARTBEAT) {
+        UE_LOG(LogMMOClient, Warning, TEXT("[MMOClient] HandleGamePacket: Received packetId=%d (%hs), Size=%d bytes"),
+            header.packetId, PacketTypeToString(header.packetId), Data.Num());
+    }
     switch (header.packetId) {
         case PACKET_S_MOVE: {
             S_Move move;

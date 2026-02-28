@@ -28,6 +28,7 @@ struct SessionInfo {
     int32_t playerId = -1;
     int32_t charId = -1;
     std::string username;
+    std::string charName;
     std::string sessionKey;
     std::shared_ptr<Player> playerEntity; // Pointer to the Player entity for this session
     sockaddr_in clientAddr{}; // Store the original sockaddr_in for robust disconnect/timeout handling

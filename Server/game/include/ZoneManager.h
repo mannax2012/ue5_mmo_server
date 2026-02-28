@@ -34,7 +34,7 @@ public:
     void SetServer(BaseServer* srv) { server = srv; }
     // Get a summary of all zones: (zoneId, entityCount, playerCount)
     std::vector<std::tuple<int32_t, int, int>> GetZoneSummary() const;
-
+    BaseServer* server = nullptr;
 private:
     static ZoneManager* s_instance;
     int zoneSize = 100;
@@ -48,5 +48,5 @@ private:
     std::unordered_map<int32_t, std::unordered_map<int32_t, std::shared_ptr<Entity>>> zoneNPCs;
     // zoneId -> (entityId -> shared_ptr<Entity>) for items
     std::unordered_map<int32_t, std::unordered_map<int32_t, std::shared_ptr<Entity>>> zoneItems;
-    BaseServer* server = nullptr;
+    
 };

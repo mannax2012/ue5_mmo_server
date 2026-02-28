@@ -2,6 +2,7 @@
 #include <limits>
 #include "Entity.h"
 #include "ZoneManager.h"
+#include "Player.h"
 #include "../../common/include/Log.h"
 
 void Entity::MoveTo(float newX, float newY, float newZ) {
@@ -21,4 +22,30 @@ void Entity::MoveTo(float newX, float newY, float newZ) {
         zoneManager->AddEntityToZone(newZone, shared_from_this());
         zoneId = newZone;
     }
+    LOG_DEBUG_EXT("Entity::MoveTo completed: " + std::to_string(id) + " now at (" + std::to_string(x) + ", " + std::to_string(y) + ", " + std::to_string(z) + ") in zone " + std::to_string(zoneId));
+   if (zoneManager) {
+    auto nearbyZones = zoneManager->GetNearbyZones(x, y, z);
+    for (int32_t zId : nearbyZones) {
+        const auto& players = zoneManager->GetPlayersInZone(zId);
+        for (const auto& playerPair : players) {
+            const auto& playerPtr = playerPair.second;
+            if (playerPtr && playerPtr->session) {
+                S_Move movePacket{};
+                movePacket.header.packetId = PACKET_S_MOVE;
+                movePacket.entityId = id;
+                movePacket.entityType = static_cast<int8_t>(type);
+                movePacket.shardId = zoneId;
+                movePacket.x = x;
+                movePacket.y = y;
+                movePacket.z = z;
+                movePacket.yaw = 0.0f; // Set actual yaw if available
+                if (zoneManager->server) {
+                    zoneManager->server->sendToClient(&movePacket, sizeof(movePacket), playerPtr->session->clientSock);
+                }
+            }
+        }
+    }
+}
+    
+
 }

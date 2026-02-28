@@ -42,14 +42,14 @@ void UMMOPlayerMovementComponent::SendCurrentPositionToServer()
             FVector CurrentPos = Owner->GetActorLocation();
             if ((!CurrentPos.IsNearlyZero() || bHasSentValidPosition) && !CurrentPos.Equals(LastSentPos, 0.01f))
             {
-                UE_LOG(LogTemp, Warning, TEXT("[MMO] Sending position to server: %s"), *CurrentPos.ToString());
+               // UE_LOG(LogTemp, Warning, TEXT("[MMO] Sending position to server: %s"), *CurrentPos.ToString());
                 SendMoveRequestToServer(CurrentPos);
                 bHasSentValidPosition = true;
                 LastSentPos = CurrentPos;
             }
             else if (CurrentPos.IsNearlyZero() && !bHasSentValidPosition)
             {
-                UE_LOG(LogTemp, Warning, TEXT("[MMO] Skipping send: Actor at (0,0,0)"));
+                //UE_LOG(LogTemp, Warning, TEXT("[MMO] Skipping send: Actor at (0,0,0)"));
             }
         }
     }
@@ -71,7 +71,7 @@ void UMMOPlayerMovementComponent::SendMoveRequestToServer(const FVector& Positio
 
 void UMMOPlayerMovementComponent::OnMoveResponse(FVector ConfirmedLocation)
 {
-    UE_LOG(LogTemp, Warning, TEXT("[MMO] OnMoveResponse: Server confirmed position: %s"), *ConfirmedLocation.ToString());
+   // UE_LOG(LogTemp, Warning, TEXT("[MMO] OnMoveResponse: Server confirmed position: %s"), *ConfirmedLocation.ToString());
     OnServerMoveConfirmed(ConfirmedLocation);
 }
 
@@ -82,12 +82,12 @@ void UMMOPlayerMovementComponent::OnServerMoveConfirmed(const FVector& Confirmed
         const float Tolerance = 0.1f;
         if (!Owner->GetActorLocation().Equals(ConfirmedLocation, Tolerance))
         {
-            UE_LOG(LogTemp, Warning, TEXT("[MMO] Correcting position from %s to %s"), *Owner->GetActorLocation().ToString(), *ConfirmedLocation.ToString());
+            //UE_LOG(LogTemp, Warning, TEXT("[MMO] Correcting position from %s to %s"), *Owner->GetActorLocation().ToString(), *ConfirmedLocation.ToString());
             Owner->SetActorLocation(ConfirmedLocation);
         }
         else
         {
-            UE_LOG(LogTemp, Warning, TEXT("[MMO] No correction needed. Position matches server."));
+            //UE_LOG(LogTemp, Warning, TEXT("[MMO] No correction needed. Position matches server."));
         }
     }
 }

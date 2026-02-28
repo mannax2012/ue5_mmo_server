@@ -17,6 +17,7 @@
 #include "../webgui/index_html.h"
 
 #include <sys/utsname.h>
+#include <boost/algorithm/string.hpp>
 
 using tcp = boost::asio::ip::tcp;
 namespace http = boost::beast::http;
@@ -67,7 +68,82 @@ void WebGuiServer::HandleRequest(http::request<http::string_body>&& req, boost::
     RouteRequest(target, std::move(req), std::move(stream));
 }
 
+bool WebGuiServer::isIpAllowed(const std::string& remoteIp) {
+    // Get allowed IPs from config (comma-separated, e.g. "127.0.0.1,192.168.1.1,*")
+    std::string allowed = server ? server->GetConfig().get("webgui_allowed_ips", "127.0.0.1") : "127.0.0.1";
+    std::vector<std::string> allowedList;
+    boost::split(allowedList, allowed, boost::is_any_of(","));
+    for (auto& ip : allowedList) boost::trim(ip);
+    for (const auto& ip : allowedList) {
+        if (ip == "*" || ip == remoteIp) return true;
+    }
+    return false;
+}
+// Minimal portable base64 decoder for HTTP Basic Auth
+typedef unsigned char uchar;
+static std::string base64_decode(const std::string& in) {
+    std::string out;
+    std::vector<int> T(256, -1);
+    for (int i = 0; i < 64; i++) T["ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"[i]] = i;
+    int val = 0, valb = -8;
+    for (uchar c : in) {
+        if (T[c] == -1) break;
+        val = (val << 6) + T[c];
+        valb += 6;
+        if (valb >= 0) {
+            out.push_back(char((val >> valb) & 0xFF));
+            valb -= 8;
+        }
+    }
+    return out;
+}
+
+bool WebGuiServer::isAuthOk(const http::request<http::string_body>& req) {
+    std::string expectedUser = server ? server->GetConfig().get("webgui_user", "admin") : "admin";
+    std::string expectedPass = server ? server->GetConfig().get("webgui_password", "admin") : "admin";
+    auto auth = req[http::field::authorization];
+    if (auth.substr(0,6) == "Basic ") {
+        std::string encoded = auth.substr(6);
+        std::string decoded;
+        try {
+            decoded = base64_decode(encoded);
+        } catch (...) { return false; }
+        auto sep = decoded.find(":");
+        if (sep != std::string::npos) {
+            std::string user = decoded.substr(0, sep);
+            std::string pass = decoded.substr(sep+1);
+            return (user == expectedUser && pass == expectedPass);
+        }
+    }
+    return false;
+}
+
 void WebGuiServer::RouteRequest(const std::string& target, http::request<http::string_body>&& req, boost::beast::tcp_stream&& stream) {
+    // Get remote IP
+    std::string remoteIp = "unknown";
+    try {
+        auto ep = stream.socket().remote_endpoint();
+        remoteIp = ep.address().to_string();
+    } catch (...) {}
+    if (!isIpAllowed(remoteIp)) {
+        http::response<http::string_body> res{http::status::forbidden, req.version()};
+        res.set(http::field::server, "MMO-Server-WebGUI");
+        res.set(http::field::content_type, "text/plain");
+        res.body() = "403 Forbidden: IP not allowed";
+        res.prepare_payload();
+        http::write(stream, res);
+        return;
+    }
+    if (!isAuthOk(req)) {
+        http::response<http::string_body> res{http::status::unauthorized, req.version()};
+        res.set(http::field::server, "MMO-Server-WebGUI");
+        res.set(http::field::content_type, "text/plain");
+        res.set(http::field::www_authenticate, "Basic realm=\"MMO WebGUI\"");
+        res.body() = "401 Unauthorized: Provide valid credentials";
+        res.prepare_payload();
+        http::write(stream, res);
+        return;
+    }
     if (target == "/sessions") {
         HandleSessions(std::move(req), std::move(stream));
     } else if (target == "/shards") {

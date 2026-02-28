@@ -5,6 +5,7 @@
 #include <memory>
 #include <boost/asio.hpp>
 #include <boost/beast.hpp>
+#include <boost/algorithm/string.hpp>
 #include <nlohmann/json.hpp>
 
 // Forward declarations for server data access
@@ -29,6 +30,8 @@ private:
     void HandleEntities(boost::beast::http::request<boost::beast::http::string_body>&& req, boost::beast::tcp_stream&& stream);
     void HandleLogs(boost::beast::http::request<boost::beast::http::string_body>&& req, boost::beast::tcp_stream&& stream);
     void HandleFrontend(boost::beast::http::request<boost::beast::http::string_body>&& req, boost::beast::tcp_stream&& stream);
+    bool isIpAllowed(const std::string& remoteIp);
+    bool isAuthOk(const boost::beast::http::request<boost::beast::http::string_body>& req);
     std::thread serverThread;
     std::atomic<bool> running{false};
     int port;

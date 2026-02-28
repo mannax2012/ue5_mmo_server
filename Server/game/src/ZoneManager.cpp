@@ -59,11 +59,91 @@ void ZoneManager::AddEntityToZone(int32_t zoneId, std::shared_ptr<Entity> entity
                 for (const auto& pair : players) {
                     auto& p = pair.second;
                     if (p && p->session) {
-                        LOG_DEBUG("Sending player spawn packet to player " + p->session->username + " (EntityId: " + std::to_string(entity->id) + ")");
+                        LOG_DEBUG("Sending player spawn packet to player " + (p->session->charName.empty() ? p->session->username : p->session->charName) + " (EntityId: " + std::to_string(entity->id) + ", ClientSock: " + std::to_string(p->session->clientSock) + ")");
                         server->sendToClient(&spawn, sizeof(spawn), p->session->clientSock);
                         
                     }
                 }
+                const auto& entities = GetEntitiesInZone(zoneId);
+                for (const auto& entityPair : entities) {
+                    auto& otherEntity = entityPair.second;
+                    if (!otherEntity || otherEntity->id == entity->id) continue;
+                    switch (otherEntity->type) {
+                        case EntityType::PLAYER: {
+                            S_PlayerSpawn otherSpawn{};
+                            otherSpawn.header.packetId = PACKET_S_PLAYER_SPAWN;
+                            otherSpawn.entityId = otherEntity->id;
+                            otherSpawn.shardId = zoneId;
+                            otherSpawn.x = otherEntity->x;
+                            otherSpawn.y = otherEntity->y;
+                            otherSpawn.z = otherEntity->z;
+                            otherSpawn.yaw = 0.0f;
+                            Player* otherPlayer = dynamic_cast<Player*>(otherEntity.get());
+                            if (otherPlayer) {
+                                strncpy(otherSpawn.name, otherPlayer->name.c_str(), sizeof(otherSpawn.name)-1);
+                                otherSpawn.classId = 0;
+                                otherSpawn.level = 1;
+                            } else {
+                                otherSpawn.name[0] = '\0';
+                                otherSpawn.classId = 0;
+                                otherSpawn.level = 1;
+                            }
+                            if (player && player->session) {
+                                server->sendToClient(&otherSpawn, sizeof(otherSpawn), player->session->clientSock);
+                            }
+                            break;
+                        }
+                        case EntityType::MOB: {
+                            S_MobSpawn otherSpawn{};
+                            otherSpawn.header.packetId = PACKET_S_MOB_SPAWN;
+                            otherSpawn.entityId = otherEntity->id;
+                            otherSpawn.shardId = zoneId;
+                            otherSpawn.x = otherEntity->x;
+                            otherSpawn.y = otherEntity->y;
+                            otherSpawn.z = otherEntity->z;
+                            otherSpawn.yaw = 0.0f;
+                            otherSpawn.mobTypeId = 0;
+                            otherSpawn.level = 1;
+                            if (player && player->session) {
+                                server->sendToClient(&otherSpawn, sizeof(otherSpawn), player->session->clientSock);
+                            }
+                            break;
+                        }
+                        case EntityType::NPC: {
+                            S_NPCSpawn otherSpawn{};
+                            otherSpawn.header.packetId = PACKET_S_NPC_SPAWN;
+                            otherSpawn.entityId = otherEntity->id;
+                            otherSpawn.shardId = zoneId;
+                            otherSpawn.x = otherEntity->x;
+                            otherSpawn.y = otherEntity->y;
+                            otherSpawn.z = otherEntity->z;
+                            otherSpawn.yaw = 0.0f;
+                            otherSpawn.npcTypeId = 0;
+                            if (player && player->session) {
+                                server->sendToClient(&otherSpawn, sizeof(otherSpawn), player->session->clientSock);
+                            }
+                            break;
+                        }
+                        case EntityType::ITEM: {
+                            S_ItemSpawn otherSpawn{};
+                            otherSpawn.header.packetId = PACKET_S_ITEM_SPAWN;
+                            otherSpawn.entityId = otherEntity->id;
+                            otherSpawn.shardId = zoneId;
+                            otherSpawn.x = otherEntity->x;
+                            otherSpawn.y = otherEntity->y;
+                            otherSpawn.z = otherEntity->z;
+                            otherSpawn.itemId = 0;
+                            otherSpawn.count = 1;
+                            if (player && player->session) {
+                                server->sendToClient(&otherSpawn, sizeof(otherSpawn), player->session->clientSock);
+                            }
+                            break;
+                        }
+                        default:
+                            break;
+                    }
+                }
+
                 break;
             }
             case EntityType::MOB: {
@@ -198,7 +278,10 @@ std::vector<int32_t> ZoneManager::GetNearbyZones(float x, float y, float z) cons
 
 
 int32_t ZoneManager::CalculateZoneId(float x, float y) const {
-    return static_cast<int32_t>(x) / zoneSize + 1000 * (static_cast<int32_t>(y) / zoneSize);
+    LOG_DEBUG_EXT("Calculating zone ID for position x=" + std::to_string(x) + ", y=" + std::to_string(y) + " with zone size " + std::to_string(zoneSize));
+    int32_t zoneId = static_cast<int32_t>(x) / zoneSize + 1000 * (static_cast<int32_t>(y) / zoneSize);
+    LOG_DEBUG_EXT("Calculated zone ID: " + std::to_string(zoneId));
+    return zoneId;
 }
 
 void ZoneManager::SetZoneSize(int size) {

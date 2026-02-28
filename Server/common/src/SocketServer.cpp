@@ -47,6 +47,7 @@ public:
         // reinterpret clientSock as endpoint pointer
         auto remote_endpoint = reinterpret_cast<boost::asio::ip::udp::endpoint*>(clientSock);
         if (remote_endpoint) {
+            LOG_DEBUG_EXT("Sending UDP packet to " + remote_endpoint->address().to_string() + ":" + std::to_string(remote_endpoint->port()));
             // Prepend 4-byte length prefix to the payload for UDP framing
             uint32_t packetLen = data.size();
             uint32_t netPacketLen = htonl(packetLen);
@@ -55,6 +56,8 @@ public:
             std::memcpy(sendBuf.data() + 4, data.data(), packetLen);
             socket.async_send_to(boost::asio::buffer(sendBuf), *remote_endpoint,
                 [](const boost::system::error_code&, std::size_t){});
+        }else{
+            LOG_ERROR("SocketServer send error: invalid clientSock endpoint");
         }
     }
     void setPacketHandler(SocketPacketHandler handler) override {

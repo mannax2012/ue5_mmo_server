@@ -199,7 +199,7 @@ public:
                     LOG_DEBUG("Received C_CharSelect from " + std::to_string(clientSock));
                     int32_t charId = req.charId;
                     // Check if character belongs to this account
-                    std::string query = "SELECT id FROM characters WHERE id=" + std::to_string(charId) + " AND account_id=" + std::to_string(session.playerId);
+                    std::string query = "SELECT id, name FROM characters WHERE id=" + std::to_string(charId) + " AND account_id=" + std::to_string(session.playerId);
                     std::vector<std::vector<std::string>> result;
                     bool ok = mysql.query(query, result);
                     S_CharSelectResult resp{};
@@ -254,11 +254,13 @@ public:
                                 break;
                             }
                             session.charId = charId;
+                            session.charName = result[0][1];
                             std::string redisSessionKey = "session_" + session.sessionKey;
                             std::vector<std::pair<std::string, std::string>> sessionFields = {
                                 {"playerId", std::to_string(session.playerId)},
                                 {"username", session.username},
                                 {"charId", std::to_string(session.charId)},
+                                {"charName", session.charName},
                                 {"sessionKey", session.sessionKey},
                                 {"fd", std::to_string(clientSock)}
                             };
