@@ -12,8 +12,17 @@
 #include <map>
 #include <unordered_map>
 #include "../include/Log.h"
+#include <string>
 
 extern BaseServer* g_lastBaseServerInstance;
+
+// Helper to build ip:port string
+static std::string EndpointToString(const boost::asio::ip::udp::endpoint& ep) {
+    return ep.address().to_string() + ":" + std::to_string(ep.port());
+}
+
+// Static mapping for UDP endpoints
+static std::unordered_map<std::string, std::shared_ptr<boost::asio::ip::udp::endpoint>> udpEndpointMap;
 
 // High-performance UDP server (cross-platform, non-blocking, multithreaded, failsafe, using Boost.Asio)
 class SocketServerImpl : public SocketServer {
@@ -93,8 +102,16 @@ private:
                             sockaddr_in clientAddr{};
                             clientAddr.sin_family = AF_INET;
                             clientAddr.sin_port = htons(remote_endpoint->port());
-                            clientAddr.sin_addr.s_addr = htonl(remote_endpoint->address().to_v4().to_ulong());
-                            if (handler) handler(payload, reinterpret_cast<intptr_t>(remote_endpoint.get()), clientAddr);
+                            auto ip_bytes = remote_endpoint->address().to_v4().to_bytes();
+                            std::memcpy(&clientAddr.sin_addr, ip_bytes.data(), ip_bytes.size());
+                            // Build ip:port string
+                            std::string endpointKey = EndpointToString(*remote_endpoint);
+                            // Store/retrieve stable endpoint pointer
+                            if (udpEndpointMap.find(endpointKey) == udpEndpointMap.end()) {
+                                udpEndpointMap[endpointKey] = remote_endpoint;
+                            }
+                            auto stable_endpoint = udpEndpointMap[endpointKey];
+                            if (handler) handler(payload, reinterpret_cast<intptr_t>(stable_endpoint.get()), clientAddr);
                         }
                     }
                 }

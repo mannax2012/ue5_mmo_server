@@ -12,4 +12,7 @@ public:
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="MMO|Movement")
     class UMMOPlayerMovementComponent* MMOPlayerMovementComponent;
+
+    // Unique entity ID for this character
+    int32 EntityId = 0;
 };

@@ -12,6 +12,8 @@
 #include "UObject/ConstructorHelpers.h"
 #include "UObject/SoftObjectPtr.h"
 #include "Packets.h"
+// For AMMOCharacter reference
+#include "MMOCharacter.h"
 // Define a log category for MMOClient
 DEFINE_LOG_CATEGORY_STATIC(LogMMOClient, Log, All);
 // --- AActor implementation for placable manager ---
@@ -181,10 +183,19 @@ void UNetworkedEntityManager::SpawnEntity(int64 EntityId, ENetworkedEntityType T
         return;
     }
     AActor* Actor = SpawnActorForEntity(World, Type, Location, Rotation);
+    
+
     if (Actor) {
         UE_LOG(LogTemp, Warning, TEXT("[NetworkedEntityManager] Spawned actor: %s at %s in world: %s (IsValid: %d, IsPendingKillPending: %d)"),
             *Actor->GetName(), *Location.ToString(), *World->GetName(), Actor->IsValidLowLevel(), Actor->IsPendingKillPending());
         SpawnedActors.Add(Actor); // Hold strong reference to prevent GC
+
+        // If Actor is a subclass of AMMOCharacter, set its EntityId
+        class AMMOCharacter* MMOChar = Cast<AMMOCharacter>(Actor);
+        if (MMOChar)
+        {
+            MMOChar->EntityId = EntityId;
+        }
     } else {
         UE_LOG(LogTemp, Error, TEXT("[NetworkedEntityManager] Failed to spawn actor for entity %lld of type %d at %s in world: %s"),
             EntityId, (int32)Type, *Location.ToString(), World ? *World->GetName() : TEXT("NULL"));

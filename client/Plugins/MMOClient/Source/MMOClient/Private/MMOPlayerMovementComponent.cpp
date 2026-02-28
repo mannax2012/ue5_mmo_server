@@ -1,5 +1,6 @@
 #include "MMOPlayerMovementComponent.h"
 #include "MMOClient.h"
+#include "MMOCharacter.h"
 #include "GameFramework/Actor.h"
 #include "MMOGameInstance.h"
 #include "Kismet/GameplayStatics.h"
@@ -28,8 +29,9 @@ void UMMOPlayerMovementComponent::BeginPlay()
                 }
             }
         }
-        // Start timer to send position every 10ms (100Hz)
-        World->GetTimerManager().SetTimer(MoveTickHandle, this, &UMMOPlayerMovementComponent::SendCurrentPositionToServer, 0.01f, true);
+        // Start timer to send position every 50ms (20Hz)
+
+        World->GetTimerManager().SetTimer(MoveTickHandle, this, &UMMOPlayerMovementComponent::SendCurrentPositionToServer, 0.05f, true);
     }
 }
 
@@ -37,20 +39,37 @@ void UMMOPlayerMovementComponent::SendCurrentPositionToServer()
 {
     if (GetNetMode() == NM_Standalone) // Only send in Standalone/Client mode
     {
-        if (AActor* Owner = GetOwner())
+        AActor* Owner = GetOwner();
+        AMMOCharacter* MMOChar = Cast<AMMOCharacter>(Owner);
+        if (!MMOChar)
         {
-            FVector CurrentPos = Owner->GetActorLocation();
-            if ((!CurrentPos.IsNearlyZero() || bHasSentValidPosition) && !CurrentPos.Equals(LastSentPos, 0.01f))
-            {
-               // UE_LOG(LogTemp, Warning, TEXT("[MMO] Sending position to server: %s"), *CurrentPos.ToString());
-                SendMoveRequestToServer(CurrentPos);
-                bHasSentValidPosition = true;
-                LastSentPos = CurrentPos;
-            }
-            else if (CurrentPos.IsNearlyZero() && !bHasSentValidPosition)
-            {
-                //UE_LOG(LogTemp, Warning, TEXT("[MMO] Skipping send: Actor at (0,0,0)"));
-            }
+            // Owner is not an MMOCharacter, stop function
+            return;
+        }
+
+        // Get MMOGameInstance and check SelectedCharacterId
+        const UWorld* World = GetWorld();
+        if (!World) return;
+        UGameInstance* GameInstance = World->GetGameInstance();
+        UMMOGameInstance* MMOGameInstance = Cast<UMMOGameInstance>(GameInstance);
+        if (!MMOGameInstance) return;
+        if (MMOGameInstance->SelectedCharacterId != MMOChar->EntityId)
+        {
+            // SelectedCharacterId does not match entityId, stop function
+            return;
+        }
+
+        FVector CurrentPos = Owner->GetActorLocation();
+        if ((!CurrentPos.IsNearlyZero() || bHasSentValidPosition) && !CurrentPos.Equals(LastSentPos, 0.01f))
+        {
+            // UE_LOG(LogTemp, Warning, TEXT("[MMO] Sending position to server: %s"), *CurrentPos.ToString());
+            SendMoveRequestToServer(CurrentPos);
+            bHasSentValidPosition = true;
+            LastSentPos = CurrentPos;
+        }
+        else if (CurrentPos.IsNearlyZero() && !bHasSentValidPosition)
+        {
+            //UE_LOG(LogTemp, Warning, TEXT("[MMO] Skipping send: Actor at (0,0,0)"));
         }
     }
 }
@@ -79,7 +98,7 @@ void UMMOPlayerMovementComponent::OnServerMoveConfirmed(const FVector& Confirmed
 {
     if (AActor* Owner = GetOwner())
     {
-        const float Tolerance = 0.1f;
+        const float Tolerance = 1.0f;
         if (!Owner->GetActorLocation().Equals(ConfirmedLocation, Tolerance))
         {
             //UE_LOG(LogTemp, Warning, TEXT("[MMO] Correcting position from %s to %s"), *Owner->GetActorLocation().ToString(), *ConfirmedLocation.ToString());

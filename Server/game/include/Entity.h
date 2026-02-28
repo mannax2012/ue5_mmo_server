@@ -18,10 +18,4 @@ public:
     virtual void MoveTo(float newX, float newY, float newZ);
 
     static int32_t CalculateZoneId(float x, float y);
-
-protected:
-    class ZoneManager* zoneManager = nullptr;
-public:
-    void SetZoneManager(class ZoneManager* zm) { zoneManager = zm; }
-    class ZoneManager* GetZoneManager() const { return zoneManager; }
 };
