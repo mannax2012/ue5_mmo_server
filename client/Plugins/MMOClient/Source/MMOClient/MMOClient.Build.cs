@@ -7,7 +7,7 @@ public class MMOClient : ModuleRules
     public MMOClient(ReadOnlyTargetRules Target) : base(Target)
     {
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
-        PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "Sockets", "Networking" });
+        PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "Sockets", "Networking", "AIModule" });
         PrivateDependencyModuleNames.AddRange(new string[] {
             "OpenSSL"
         });

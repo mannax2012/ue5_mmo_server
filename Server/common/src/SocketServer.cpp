@@ -53,6 +53,11 @@ public:
         threads.clear();
     }
     void send(const std::vector<uint8_t>& data, intptr_t clientSock) override {
+        // Failsafe: check for obviously invalid clientSock before casting
+        if (clientSock == 0 || clientSock == 1 || clientSock == -1 || clientSock < 4096) {
+            LOG_ERROR("SocketServer send error: clientSock value is suspicious/invalid: " + std::to_string(clientSock));
+            return;
+        }
         // reinterpret clientSock as endpoint pointer
         auto remote_endpoint = reinterpret_cast<boost::asio::ip::udp::endpoint*>(clientSock);
         if (remote_endpoint) {
@@ -66,7 +71,7 @@ public:
             socket.async_send_to(boost::asio::buffer(sendBuf), *remote_endpoint,
                 [](const boost::system::error_code&, std::size_t){});
         }else{
-            LOG_ERROR("SocketServer send error: invalid clientSock endpoint");
+            LOG_ERROR("SocketServer send error: invalid clientSock endpoint (nullptr after cast)");
         }
     }
     void setPacketHandler(SocketPacketHandler handler) override {

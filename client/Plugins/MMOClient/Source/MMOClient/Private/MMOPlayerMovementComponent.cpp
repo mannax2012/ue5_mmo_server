@@ -17,21 +17,39 @@ UMMOPlayerMovementComponent::UMMOPlayerMovementComponent(const FObjectInitialize
 void UMMOPlayerMovementComponent::BeginPlay()
 {
     Super::BeginPlay();
+    // Defer MMOClient event binding and movement timer until EntityId is set and matches SelectedCharacterId
     if (const UWorld* World = GetWorld())
     {
-        if (UGameInstance* GameInstance = World->GetGameInstance())
-        {
-            if (UMMOGameInstance* MMOGameInstance = Cast<UMMOGameInstance>(GameInstance))
-            {
-                if (UMMOClient* MMOClient = MMOGameInstance->GetMMOClient())
-                {
-                    MMOClient->OnMoveResponse.AddDynamic(this, &UMMOPlayerMovementComponent::OnMoveResponse);
-                }
-            }
-        }
-        // Start timer to send position every 50ms (20Hz)
+        FTimerDelegate DeferredInitDelegate;
+        DeferredInitDelegate.BindLambda([this]() {
+            AActor* Owner = GetOwner();
+            AMMOCharacter* MMOChar = Cast<AMMOCharacter>(Owner);
+            if (!MMOChar) return;
+            const UWorld* World = GetWorld();
+            if (!World) return;
+            UGameInstance* GameInstance = World->GetGameInstance();
+            UMMOGameInstance* MMOGameInstance = Cast<UMMOGameInstance>(GameInstance);
+            if (!MMOGameInstance) return;
+            if(MMOChar->EntityId == 0) return; // Wait until EntityId is set
 
-        World->GetTimerManager().SetTimer(MoveTickHandle, this, &UMMOPlayerMovementComponent::SendCurrentPositionToServer, 0.05f, true);
+            if (MMOGameInstance->SelectedCharacterId != MMOChar->EntityId){
+                // Clear the deferred init timer
+                World->GetTimerManager().ClearTimer(DeferredInitHandle);
+                return;
+            }
+
+            // Only bind and start timer for local player
+            if (UMMOClient* MMOClient = MMOGameInstance->GetMMOClient())
+            {
+                MMOClient->OnMoveResponse.AddDynamic(this, &UMMOPlayerMovementComponent::OnMoveResponse);
+            }
+            World->GetTimerManager().SetTimer(MoveTickHandle, this, &UMMOPlayerMovementComponent::SendCurrentPositionToServer, 0.05f, true);
+
+            // Clear the deferred init timer
+            World->GetTimerManager().ClearTimer(DeferredInitHandle);
+        });
+        // Poll every 0.05s until ready
+        World->GetTimerManager().SetTimer(DeferredInitHandle, DeferredInitDelegate, 0.05f, true);
     }
 }
 
@@ -91,6 +109,25 @@ void UMMOPlayerMovementComponent::SendMoveRequestToServer(const FVector& Positio
 void UMMOPlayerMovementComponent::OnMoveResponse(FVector ConfirmedLocation)
 {
    // UE_LOG(LogTemp, Warning, TEXT("[MMO] OnMoveResponse: Server confirmed position: %s"), *ConfirmedLocation.ToString());
+        AActor* Owner = GetOwner();
+        AMMOCharacter* MMOChar = Cast<AMMOCharacter>(Owner);
+        if (!MMOChar)
+        {
+            // Owner is not an MMOCharacter, stop function
+            return;
+        }
+
+        // Get MMOGameInstance and check SelectedCharacterId
+        const UWorld* World = GetWorld();
+        if (!World) return;
+        UGameInstance* GameInstance = World->GetGameInstance();
+        UMMOGameInstance* MMOGameInstance = Cast<UMMOGameInstance>(GameInstance);
+        if (!MMOGameInstance) return;
+        if (MMOGameInstance->SelectedCharacterId != MMOChar->EntityId)
+        {
+            // SelectedCharacterId does not match entityId, stop function
+            return;
+        }
     OnServerMoveConfirmed(ConfirmedLocation);
 }
 

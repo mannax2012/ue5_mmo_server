@@ -15,6 +15,7 @@ protected:
     virtual void BeginPlay() override;
 
     FTimerHandle MoveTickHandle;
+    FTimerHandle DeferredInitHandle; // Added for deferred initialization
     void SendCurrentPositionToServer();
     void SendMoveRequestToServer(const FVector& Position);
     UFUNCTION()

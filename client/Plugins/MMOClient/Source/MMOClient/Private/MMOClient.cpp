@@ -661,14 +661,19 @@ void UMMOClient::HandleGamePacket(const TArray<uint8>& Data)
                 UGameInstance* GameInstance = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
                 UMMOGameInstance* MMOGameInstance = Cast<UMMOGameInstance>(GameInstance);
                 if(MMOGameInstance && MMOGameInstance->NetworkedEntityManager) {
-                    MMOGameInstance->NetworkedEntityManager->HandleEntityMovePacket(move);
+                    if(MMOGameInstance && move.entityId != MMOGameInstance->SelectedCharacterId){
+                        MMOGameInstance->NetworkedEntityManager->HandleEntityMovePacket(move);
+                    }
                 } else if (!MMOGameInstance) {
                     UE_LOG(LogMMOClient, Error, TEXT("Failed to cast GameInstance to MMOGameInstance!"));
                 } else {
                     UE_LOG(LogMMOClient, Error, TEXT("NetworkedEntityManager is null!"));
                 }
-                FVector ConfirmedLocation(move.x, move.y, move.z);
-                OnMoveResponse.Broadcast(ConfirmedLocation);
+                // Only broadcast for local player
+                if (MMOGameInstance && move.entityId == MMOGameInstance->SelectedCharacterId) {
+                    FVector ConfirmedLocation(move.x, move.y, move.z);
+                    OnMoveResponse.Broadcast(ConfirmedLocation);
+                }
             }
             break;
         }
@@ -700,6 +705,22 @@ void UMMOClient::HandleGamePacket(const TArray<uint8>& Data)
                 UMMOGameInstance* MMOGameInstance = Cast<UMMOGameInstance>(GameInstance);
                 if(MMOGameInstance && MMOGameInstance->NetworkedEntityManager) {
                     MMOGameInstance->NetworkedEntityManager->HandlePlayerSpawnPacket(spawn);
+                } else if (!MMOGameInstance) {
+                    UE_LOG(LogMMOClient, Error, TEXT("Failed to cast GameInstance to MMOGameInstance!"));
+                } else {
+                    UE_LOG(LogMMOClient, Error, TEXT("NetworkedEntityManager is null!"));
+                }
+            }
+            break;
+        }
+        case PACKET_S_PLAYER_DESPAWN: {
+            S_PlayerDespawn despawn;
+            if (DeserializeStruct(Data, despawn)) {
+                UE_LOG(LogMMOClient, Log, TEXT("Player despawn packet received. EntityId: %d"), despawn.entityId);
+                UGameInstance* GameInstance = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
+                UMMOGameInstance* MMOGameInstance = Cast<UMMOGameInstance>(GameInstance);
+                if(MMOGameInstance && MMOGameInstance->NetworkedEntityManager) {
+                    MMOGameInstance->NetworkedEntityManager->HandlePlayerDespawnPacket(despawn);
                 } else if (!MMOGameInstance) {
                     UE_LOG(LogMMOClient, Error, TEXT("Failed to cast GameInstance to MMOGameInstance!"));
                 } else {

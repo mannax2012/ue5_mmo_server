@@ -58,7 +58,7 @@ void GameServer::handlePacket(const PacketHeader& header, const std::vector<uint
             sendToClient(&resp, sizeof(resp), clientSock);
             if (resp.resultCode == 0) {
                 auto player = std::make_shared<Player>();
-                player->InitFromDB(mysql, session.charId, session.username, session.playerId);
+                player->InitFromDB(mysql, session.charId, session.charName, session.playerId);
                 player->session = &session; // Set direct session pointer
                 zoneManager.AddEntityToZone(player->zoneId, player);
                 session.playerEntity = player;

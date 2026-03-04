@@ -34,6 +34,10 @@ struct FNetworkedEntityInfo
     FRotator Rotation = FRotator::ZeroRotator;
     UPROPERTY(BlueprintReadOnly)
     TWeakObjectPtr<AActor> Actor;
+
+    // For smooth movement and jump cooldown
+    FVector LastMoveTarget = FVector::ZeroVector;
+    double LastJumpTime = 0.0;
 };
 
 UCLASS(Blueprintable)
