@@ -21,6 +21,7 @@ CMakeCache.txt
 cmake_install.cmake
 Makefile
 
+
 # IDE/project files
 .vscode/
 .idea/
@@ -61,3 +62,6 @@ __pycache__/
 *.bak
 *.old
 *.orig
+
+#local files
+open_dev.bat
